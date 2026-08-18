@@ -1,0 +1,22 @@
+snapshot: yfinance, as of 2026-08-17, 8 names (SPY, AAPL, MSFT, XOM, KO, TSLA, GME, IWM)
+calibrating the venue to each name
+  SPY   scale= 1.804  ADV sim/real= 46.74/ 47.32M  sigma sim/target=0.03967/0.04114  spread=2.0t  touch=4.5 lots  [6s]
+  AAPL  scale= 2.030  ADV sim/real= 44.90/ 48.12M  sigma sim/target=0.03102/0.03163  spread=1.0t  touch=4.7 lots  [8s]
+  MSFT  scale= 0.914  ADV sim/real= 32.26/ 33.02M  sigma sim/target=0.06328/0.06497  spread=2.0t  touch=3.3 lots  [4s]
+  XOM   scale= 0.624  ADV sim/real= 14.96/ 14.53M  sigma sim/target=0.01442/0.01675  spread=1.0t  touch=4.5 lots  [3s]
+  KO    scale= 0.823  ADV sim/real= 14.23/ 15.87M  sigma sim/target=0.00624/0.00673  spread=1.0t  touch=5.6 lots  [4s]
+  TSLA  scale= 1.152  ADV sim/real= 38.20/ 40.13M  sigma sim/target=0.06637/0.06593  spread=2.0t  touch=3.6 lots  [4s]
+  GME   scale= 0.273  ADV sim/real=  4.52/  4.57M  sigma sim/target=0.00282/0.00291  spread=1.0t  touch=6.0 lots  [2s]
+  IWM   scale= 0.930  ADV sim/real= 22.39/ 23.81M  sigma sim/target=0.02334/0.02392  spread=1.0t  touch=4.9 lots  [4s]
+measuring impact on MSFT against paired counterfactuals
+  gamma=2.634e-07 $/share^2   eta=0.0001467 $/share/(share/s)   epsilon=0.01 $/share
+  temporary impact exponent = nan (R2 nan);  linear model R2 = 0.947   [193s]
+algorithm tournament: 12 cells x 11 runs
+     8%  [   40s elapsed,   441s left]
+    17%  [   40s elapsed,   201s left]
+    25%  [   40s elapsed,   121s left]
+    33%  [   40s elapsed,    81s left]
+    42%  [   41s elapsed,    57s left]
+    50%  [   41s elapsed,    41s left]
+    58%  [   41s elapsed,    29s left]
+    67%  [   41s elapsed,    21s left]

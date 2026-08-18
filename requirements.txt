@@ -1,0 +1,21 @@
+# Needed only to re-run the research and regenerate docs/data.js.
+# The interface itself (docs/index.html) needs nothing installed - just a browser.
+#
+# Pinned to the versions this project was developed and validated against.
+# Python 3.14.4.
+
+numpy==2.4.6
+scipy==1.18.0
+pandas==3.0.3
+matplotlib==3.11.0
+PyYAML==6.0.3
+pytest==9.1.1
+
+# Optional: only used by scripts/refresh_data.py to re-pull the daily bar
+# snapshot that calibrates volatility, ADV and spread. Everything works
+# without it - src/data/market.py falls back to the committed CSV in data/,
+# and then to a labelled synthetic snapshot.
+yfinance==1.5.1
+
+# Optional: only used by scripts/make_gif.py to assemble results/interface.gif.
+pillow==11.4.0

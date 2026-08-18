@@ -1,0 +1,122 @@
+# Every number the library needs lives here. src/ invents no constants.
+# Changing a value here changes a number in results/ and in docs/data.js.
+
+market:
+  # Eight US names chosen to span the liquidity cross-section rather than to
+  # be interesting individually: SPY and IWM (ETFs, tightest), AAPL/MSFT/TSLA
+  # (mega-cap, deep), XOM/KO (large but slower), GME (the thin one, and the
+  # only name here where the tick is a real constraint at $19). The execution
+  # problem is entirely about the ratio of order size to available liquidity,
+  # so a universe with no spread of liquidity has nothing to show.
+  tickers: [SPY, AAPL, MSFT, XOM, KO, TSLA, GME, IWM]
+  start: "2021-01-04"
+  cache_file: data/market_snapshot.csv
+  trading_days: 252
+  seconds_per_day: 23400          # 09:30-16:00, in seconds
+  min_history_days: 250
+  vol_window: 252                 # bars for close-to-close vol
+  volume_window: 63               # bars for median daily volume
+  spread_window: 252              # bars for the spread diagnostics
+  tick_size: 0.01
+  # The book is seeded at one tick and the flow model decides what the spread
+  # becomes. It is NOT estimated from daily bars: both published daily-bar
+  # spread estimators return noise on liquid names (Corwin-Schultz says 20 bp
+  # for SPY, Abdi-Ranaldo says 22 bp; the truth is 0.13 bp). That failure is
+  # reported on the page rather than hidden. See src/data/market.py.
+  seed_spread_ticks: 1
+  synthetic_seed: 20260818
+  default_ticker: MSFT
+
+book:
+  n_levels: 10                    # price levels quoted each side
+  tick_size: 0.01
+  lot_size: 100                   # shares per lot; the book's unit of size
+  initial_depth_lots: 25          # seeded ladder, reshaped by flow within ~1 min
+  depth_decay: 0.0
+  max_queue_lots: 100000
+
+flow:
+  # --- limit orders: lambda(k) = limit_k / k**limit_alpha lots/s per side ---
+  # These are pre-scaling values. calibrate_venue multiplies every rate below
+  # by one factor so the simulated session prints the name's real ADV; the
+  # scaled values per name are in results/venue_calibration.csv.
+  limit_k: 4.0
+  limit_alpha: 0.55
+  # --- market orders: Hawkes baseline, lots/s per side ---
+  market_rate: 1.0
+  # --- cancellations: theta(k) = cancel_theta / k**cancel_alpha per lot/s ---
+  cancel_theta: 0.90
+  cancel_alpha: 0.35
+  # Quotes the price has walked away from are not deep book, they are stale.
+  # Without this the book fills with liquidity nobody would honour and the
+  # measured spread drifts out to fifteen ticks.
+  stale_cancel_theta: 2.5
+  limit_size_mean_lots: 2.0
+  market_size_mean_lots: 2.0
+  sweep_limit_ticks: 5            # how far anonymous flow will walk the book
+  # --- self-excitation ---
+  # Branching ratio n = alpha/beta = 0.46: trades cluster, and just under half
+  # of all trades are "children" of an earlier trade. Empirical estimates on
+  # equity trade flow run 0.6-0.9; this is deliberately conservative, because
+  # the clustering is used here to stress a schedule, not to inflate a number.
+  hawkes_enabled: true
+  hawkes_alpha: 0.60
+  hawkes_beta: 1.30
+  hawkes_cross: 0.25              # share of excitation that spills to the
+                                  # opposite side
+  latent_price: true
+  kyle_lambda: 0.0                # 0 = calibrate at runtime
+  seed: 20260818
+  # --- intraday shape ---
+  # multiplier(u) = u_a + u_b((1-u)^u_p + u^u_p), normalised to mean 1 over the
+  # day. Roughly 2.3x at the open and close against 0.6x at midday, which is
+  # the usual shape. Normalisation matters: switching the shape on changes when
+  # volume arrives, never how much.
+  u_a: 0.62
+  u_b: 0.95
+  u_p: 3.0
+
+impact:
+  gamma: 0.0                      # 0 = measure from the simulator
+  eta: 0.0                        # 0 = measure from the simulator
+  epsilon_from_spread: true
+  fee_bps: 0.15
+  fit_impact_exponent: true
+  # Participation rates at which parent orders are run to trace the impact
+  # curve. The top of the range is deliberately past the point where the venue
+  # can absorb the order inside the horizon - a calibration that only samples
+  # the comfortable region cannot see the convexity.
+  calib_participations: [0.005, 0.01, 0.02, 0.04, 0.07, 0.10, 0.15, 0.20]
+  calib_paths: 120
+
+execution:
+  side: buy
+  horizon_seconds: 1800           # 30 minutes
+  n_slices: 30                    # one decision per minute
+  parent_pct_adv: 0.05
+  risk_aversion: 1.0e-6           # lambda, per dollar
+  algos: [TWAP, VWAP, POV, AC, Adaptive]
+  pov_rate: 0.15
+  adaptive_tilt: 1.0
+  child_order_type: market        # market | limit_then_market
+  limit_offset_ticks: 1
+  mc_paths: 400
+  seed: 20260818
+  lambda_lo: 1.0e-8
+  lambda_hi: 1.0e-4
+  lambda_n: 41
+
+sweep:
+  # The precomputed grid the page ships. 5 sizes x 3 vol regimes x 9 algorithm
+  # variants x 150 paths, all on common random numbers.
+  sizes_pct_adv: [0.01, 0.02, 0.05, 0.10, 0.20]
+  lambdas: [1.0e-7, 1.0e-6, 1.0e-5]
+  vol_multipliers: [0.5, 1.0, 2.0]
+  paths: 150
+  tape_seconds: 900.0
+  tape_snapshot_every: 4.0
+
+frontend:
+  round_decimals: 6
+  data_file: docs/data.js
+  hist_bins: 41
