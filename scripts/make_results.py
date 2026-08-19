@@ -48,7 +48,9 @@ from src.execution.runner import (apply_control_variate, baseline_path,  # noqa:
                                   run_parent)
 from src.execution.schedules import (POV, TWAP, VWAP, Adaptive,  # noqa: E402
                                      AlmgrenChriss)
-from src.flow.calibrate import calibrate_venue, measure_impact  # noqa: E402
+from src.flow.calibrate import (calibrate_venue, fit_impact,  # noqa: E402
+                                impact_sample, measure_impact,
+                                summarise_impact_samples)
 from src.utils.config import AppConfig  # noqa: E402
 from src.utils.stats import cost_stats, histogram, paired_test  # noqa: E402
 
@@ -67,12 +69,11 @@ def _init(payload: Dict[str, object]) -> None:
     _CTX.update(payload)
 
 
-def _make_algo(name: str, lam: float, params: ACParams, cfg: AppConfig):
+def _make_algo(name: str, lam: float, params: ACParams, cfg: AppConfig, flow):
     if name == "TWAP":
         return TWAP()
     if name == "VWAP":
-        return VWAP(_CTX["flow"], _CTX["start_fraction"],
-                    cfg.market.seconds_per_day)
+        return VWAP(flow, _CTX["start_fraction"], cfg.market.seconds_per_day)
     if name == "POV":
         return POV(cfg.execution.pov_rate)
     if name == "AC":
@@ -117,7 +118,7 @@ def _run_cell(task: Tuple[float, float, int]) -> List[Dict[str, float]]:
                       eta=params.eta, gamma=params.gamma, epsilon=params.epsilon)
 
     for name, lam in plans:
-        algo = _make_algo(name, lam or 0.0, p_cell, cfg)
+        algo = _make_algo(name, lam or 0.0, p_cell, cfg, flow)
         res = run_parent(stats, cfg.book, flow, algo, X, seed, horizon,
                          n_slices, kyle_lambda=kyle, sigma_exo=sigma_exo,
                          vol_multiplier=vol_mult,
@@ -134,6 +135,32 @@ def _run_cell(task: Tuple[float, float, int]) -> List[Dict[str, float]]:
                     "final_move_bps": 1e4 * (res.final_mid - res.arrival_mid)
                     / res.arrival_mid})
     return out
+
+
+def impact_scale(name, base) -> float:
+    """Carry impact parameters measured on one name to another.
+
+    Both coefficients are scaled by the ratio of *dollar volatility per unit of
+    volume*, ``P sigma / ADV``. That is the same dimensional argument the Kyle
+    coefficient rests on - a day's volume moves the price by about a day's
+    volatility - and it is the only scaling in this project that is applied
+    across names, so it is worth being explicit that it is an assumption rather
+    than a measurement. The alternative would be to repeat the whole impact
+    calibration for all eight names, which costs eight times the compute for a
+    cross-sectional chart that is illustrative either way.
+    """
+    def unit(s):
+        return s.price * s.sigma_annual / s.adv_shares
+    return float(unit(name) / unit(base))
+
+
+def _impact_task(task):
+    """One paired impact sample. Top-level so the process pool can pickle it."""
+    rho, X, seed = task
+    cfg: AppConfig = _CTX["cfg"]           # type: ignore[assignment]
+    return (rho, X, impact_sample(_CTX["stats"], cfg.book, _CTX["cal"], X, seed,
+                                  float(_CTX["horizon"]), int(_CTX["n_slices"]),
+                                  cfg.market.seconds_per_day))
 
 
 def _run_cross_section(task: Tuple[str, int]) -> List[Dict[str, float]]:
@@ -160,8 +187,7 @@ def _run_cross_section(task: Tuple[str, int]) -> List[Dict[str, float]]:
     for name, lam in (("TWAP", None), ("VWAP", None), ("POV", None),
                       ("AC", cfg.execution.risk_aversion),
                       ("Adaptive", cfg.execution.risk_aversion)):
-        _CTX["flow"] = flow                # VWAP reads the curve from here
-        algo = _make_algo(name, lam or 0.0, p_cell, cfg)
+        algo = _make_algo(name, lam or 0.0, p_cell, cfg, flow)
         res = run_parent(stats, cfg.book, flow, algo, X, seed, horizon,
                          n_slices, kyle_lambda=entry["kyle"],
                          sigma_exo=entry["sigma_exo"],
@@ -201,18 +227,60 @@ def stage_calibrate(cfg: AppConfig, snap, quick: bool, log) -> Dict[str, object]
     return cals
 
 
-def stage_impact(cfg: AppConfig, snap, cals, ticker: str, quick: bool, log):
+def stage_impact(cfg: AppConfig, snap, cals, ticker: str, quick: bool,
+                 workers: int, log):
+    """Measure gamma, eta and the impact exponent, across every core.
+
+    The samples are independent, so this parallelises exactly; it is the
+    single most expensive stage in the pipeline because each sample is two full
+    simulated sessions.
+    """
     log(f"measuring impact on {ticker} against paired counterfactuals")
     t0 = time.time()
+    stats = snap[ticker]
+    cal = cals[ticker]
     parts = (0.01, 0.05, 0.15) if quick else cfg.impact.calib_participations
     paths = 8 if quick else cfg.impact.calib_paths
-    ic = measure_impact(snap[ticker], cfg.book, cals[ticker], parts, paths,
-                        cfg.execution.horizon_seconds, cfg.execution.n_slices,
-                        seconds_per_day=cfg.market.seconds_per_day)
+    horizon, n_slices = cfg.execution.horizon_seconds, cfg.execution.n_slices
+    lot = cfg.book.lot_size
+    expected_volume = cal.sim_adv_shares * horizon / cfg.market.seconds_per_day
+
+    tasks = []
+    for rho in parts:
+        X = int(round(max(rho * expected_volume, lot) / lot) * lot)
+        tasks += [(rho, X, 5000 + i) for i in range(paths)]
+
+    ctx = {"cfg": cfg, "stats": stats, "cal": cal, "horizon": horizon,
+           "n_slices": n_slices}
+    bucket: Dict[float, List[Dict[str, float]]] = {rho: [] for rho in parts}
+    sizes: Dict[float, int] = {}
+    if workers > 1:
+        with mp.Pool(workers, initializer=_init, initargs=(ctx,)) as pool:
+            for rho, X, sample in pool.imap_unordered(_impact_task, tasks,
+                                                      chunksize=2):
+                bucket[rho].append(sample)
+                sizes[rho] = X
+    else:
+        _init(ctx)
+        for task in tasks:
+            rho, X, sample = _impact_task(task)
+            bucket[rho].append(sample)
+            sizes[rho] = X
+
+    rows = [summarise_impact_samples(rho, sizes[rho], horizon, bucket[rho])
+            for rho in parts]
+    ic = fit_impact(stats, cal, rows)
     pd.DataFrame(ic.rows).to_csv(RESULTS / "impact_calibration.csv",
                                  index=False, float_format="%.8g")
+    for r in ic.rows:
+        log(f"  participation {r['participation']:6.1%}  X={r['X']:>9,.0f} sh  "
+            f"permanent ${r['perm_usd']:6.3f} +/- {r['perm_se']:.3f}  "
+            f"cost/share ${r['cost_per_share']:7.4f} +/- {r['cost_se']:.4f}  "
+            f"fill {r['fill_rate']:6.1%}")
     log(f"  gamma={ic.gamma:.4g} $/share^2   eta={ic.eta:.4g} $/share/(share/s)"
         f"   epsilon={ic.epsilon:.4g} $/share")
+    log(f"  injected Kyle lambda = {cal.kyle_lambda / lot:.4g} $/share; "
+        f"recovered gamma is {ic.gamma / (cal.kyle_lambda / lot):.0%} of it")
     log(f"  temporary impact exponent = {ic.exponent:.3f} (R2 {ic.exponent_r2:.3f});"
         f"  linear model R2 = {ic.linear_r2:.3f}   [{time.time()-t0:.0f}s]")
     return ic
@@ -312,6 +380,49 @@ def stage_frontier(cfg: AppConfig, ctx, summary: pd.DataFrame, ic, stats,
     return df, sim_df
 
 
+def stage_cross_section(cfg, snap, cals, cal, ic, stats, workers: int,
+                        quick: bool, log) -> pd.DataFrame:
+    """The same order, sized to each name's own ADV, in each name's venue."""
+    cross_ctx = {"cfg": cfg, "horizon": cfg.execution.horizon_seconds,
+                 "n_slices": cfg.execution.n_slices,
+                 "cross_size": cfg.sweep.default_size_pct_adv,
+                 "start_fraction": 0.25, "flow": cal.flow,
+                 "cross": {t: {"stats": snap[t], "flow": cals[t].flow,
+                               "kyle": cals[t].kyle_lambda,
+                               "sigma_exo": cals[t].sigma_exo,
+                               "ac_params": ACParams(
+                                   X=1.0, T=cfg.execution.horizon_seconds,
+                                   N=cfg.execution.n_slices,
+                                   sigma=snap[t].sigma_per_second(
+                                       cfg.market.seconds_per_day),
+                                   eta=ic.eta * impact_scale(snap[t], stats),
+                                   gamma=ic.gamma * impact_scale(snap[t], stats),
+                                   epsilon=ic.epsilon)}
+                           for t in snap.tickers}}
+    seeds = list(range(30_000, 30_000 + (4 if quick else 60)))
+    tasks = [(t, sd) for t in snap.tickers for sd in seeds]
+    log(f"cross-section: {len(tasks)} runs across {len(snap.tickers)} names")
+    rows: List[Dict[str, float]] = []
+    t0 = time.time()
+    if workers > 1:
+        with mp.Pool(workers, initializer=_init, initargs=(cross_ctx,)) as pool:
+            for part in pool.imap_unordered(_run_cross_section, tasks, chunksize=2):
+                rows.extend(part)
+    else:
+        _init(cross_ctx)
+        for task in tasks:
+            rows.extend(_run_cross_section(task))
+    cross = pd.DataFrame(rows)
+    cross.to_csv(RESULTS / "cross_section.csv", index=False, float_format="%.6g")
+    for t in snap.tickers:
+        g = cross[(cross["ticker"] == t) & (cross["algo"] == "TWAP")]
+        log(f"  {t:<5} TWAP {g['shortfall_adj_bps'].mean():6.2f} bp   "
+            f"fill {g['fill_rate'].mean():5.1%}   "
+            f"(vol {snap[t].sigma_annual:5.1%}, ADV {snap[t].adv_shares/1e6:5.1f}M)")
+    log(f"  done in {time.time() - t0:.0f}s")
+    return cross
+
+
 def stage_tape(cfg: AppConfig, ctx, stats, log) -> Dict[str, object]:
     """One execution, recorded frame by frame, for the animation."""
     log("recording one execution for the book animation")
@@ -321,13 +432,22 @@ def stage_tape(cfg: AppConfig, ctx, stats, log) -> Dict[str, object]:
     p_cell = ACParams(X=float(X), T=cfg.execution.horizon_seconds,
                       N=cfg.execution.n_slices, sigma=p.sigma, eta=p.eta,
                       gamma=p.gamma, epsilon=p.epsilon)
-    algo = AlmgrenChriss(p_cell, cfg.execution.risk_aversion)
-    res = run_parent(stats, cfg.book, ctx["flow"], algo, X, 424242,
-                     cfg.execution.horizon_seconds, cfg.execution.n_slices,
-                     kyle_lambda=float(ctx["kyle"]),
-                     sigma_exo=float(ctx["sigma_exo"]),
-                     seconds_per_day=cfg.market.seconds_per_day,
-                     record_every=cfg.sweep.tape_snapshot_every)
+    # Five candidate paths, and the one with the median shortfall is the one
+    # that gets animated. Picking a single arbitrary seed would as likely as
+    # not show a path where the price ran away and the algorithm looked either
+    # heroic or terrible - neither of which is what the animation is for.
+    cands = []
+    for seed in (424242, 424243, 424244, 424245, 424246):
+        algo = AlmgrenChriss(p_cell, cfg.execution.risk_aversion)
+        r = run_parent(stats, cfg.book, ctx["flow"], algo, X, seed,
+                       cfg.execution.horizon_seconds, cfg.execution.n_slices,
+                       kyle_lambda=float(ctx["kyle"]),
+                       sigma_exo=float(ctx["sigma_exo"]),
+                       seconds_per_day=cfg.market.seconds_per_day,
+                       record_every=cfg.sweep.tape_snapshot_every)
+        cands.append(r)
+    res = sorted(cands, key=lambda r: r.shortfall_bps)[len(cands) // 2]
+
     frames = [{"t": round(s.t, 1), "bid": round(s.best_bid, 2),
                "ask": round(s.best_ask, 2), "latent": round(s.latent, 3),
                "bq": s.bid_lots, "aq": s.ask_lots,
@@ -434,7 +554,7 @@ def stage_figures(summary: pd.DataFrame, ic, model_frontier, sim_frontier,
         fig, ax = plt.subplots(figsize=(6.2, 3.6))
         piv.plot(kind="bar", ax=ax)
         ax.set_ylabel("mean shortfall (bp)")
-        ax.set_title("same 5%-of-ADV order, eight names")
+        ax.set_title("the same order, eight names")
         fig.tight_layout()
         fig.savefig(RESULTS / "fig_cross_section.png")
         plt.close(fig)
@@ -446,6 +566,9 @@ def main() -> int:
                     help="tiny grid, for checking the pipeline runs")
     ap.add_argument("--workers", type=int, default=0,
                     help="0 = all cores minus two")
+    ap.add_argument("--only", choices=["cross"], default=None,
+                    help="re-run one stage on top of an existing results/ "
+                         "directory, instead of the whole pipeline")
     args = ap.parse_args()
 
     RESULTS.mkdir(exist_ok=True)
@@ -465,10 +588,38 @@ def main() -> int:
     if not snap.is_real:
         log("  WARNING: synthetic snapshot - no market data was available")
 
+    workers = args.workers or max(1, (mp.cpu_count() or 2) - 2)
     cals = stage_calibrate(cfg, snap, args.quick, log)
     ticker = cfg.market.default_ticker
     stats = snap[ticker]
-    ic = stage_impact(cfg, snap, cals, ticker, args.quick, log)
+    if args.only == "cross":
+        # Re-run one stage on top of an existing results/ directory. The impact
+        # parameters are read back rather than remeasured, so the numbers stay
+        # exactly the ones the rest of results/ was built from.
+        import dataclasses as _dc
+        from src.flow.calibrate import ImpactCalibration
+        prev = json.loads((RESULTS / "summary.json").read_text(encoding="utf-8"))
+        ic = ImpactCalibration(ticker=ticker, gamma=prev["impact"]["gamma"],
+                               eta=prev["impact"]["eta"],
+                               epsilon=prev["impact"]["epsilon"],
+                               exponent=prev["impact"]["exponent"],
+                               exponent_r2=prev["impact"]["exponent_r2"],
+                               linear_r2=prev["impact"]["linear_r2"],
+                               rows=prev["impact"]["rows"])
+        cross = stage_cross_section(cfg, snap, cals, cals[ticker], ic, stats,
+                                    workers, args.quick, log)
+        prev["cross_section"] = (cross.groupby(["ticker", "algo"])
+            .agg(mean_bps=("shortfall_adj_bps", "mean"),
+                 stderr_bps=("shortfall_adj_bps",
+                             lambda x: x.std(ddof=1) / math.sqrt(len(x))),
+                 fill_rate=("fill_rate", "mean")).reset_index()
+            .replace({np.nan: None}).to_dict(orient="records"))
+        (RESULTS / "summary.json").write_text(json.dumps(prev), encoding="utf-8")
+        log("cross-section stage rewritten into results/summary.json")
+        log_file.close()
+        return 0
+
+    ic = stage_impact(cfg, snap, cals, ticker, args.quick, workers, log)
 
     cal = cals[ticker]
     ac_params = ACParams(X=1.0, T=cfg.execution.horizon_seconds,
@@ -481,11 +632,10 @@ def main() -> int:
            "n_slices": cfg.execution.n_slices,
            "lambdas": list(cfg.sweep.lambdas), "start_fraction": 0.25}
 
-    sizes = (0.02, 0.10) if args.quick else cfg.sweep.sizes_pct_adv
+    sizes = (0.001, 0.005) if args.quick else cfg.sweep.sizes_pct_adv
     vols = (1.0,) if args.quick else cfg.sweep.vol_multipliers
     n_paths = 6 if args.quick else cfg.sweep.paths
     seeds = list(range(10_000, 10_000 + n_paths))
-    workers = args.workers or max(1, (mp.cpu_count() or 2) - 2)
 
     df = stage_tournament(cfg, ctx, sizes, vols, seeds, workers, log)
     df.to_csv(RESULTS / "tournament_paths.csv", index=False, float_format="%.6g")
@@ -494,8 +644,13 @@ def main() -> int:
                    float_format="%.6g")
 
     # Headline comparison at the default size, base volatility.
-    default_size = 0.05 if 0.05 in sizes else sizes[len(sizes) // 2]
-    log(f"algorithm comparison at {default_size:.0%} of ADV, base volatility:")
+    default_size = cfg.sweep.default_size_pct_adv
+    if default_size not in sizes:
+        default_size = sizes[len(sizes) // 2]
+    interval_frac = (cfg.execution.horizon_seconds / cfg.market.seconds_per_day)
+    log(f"algorithm comparison at {default_size:.2%} of ADV "
+        f"(~{default_size / interval_frac:.0%} of the volume expected in a "
+        f"{cfg.execution.horizon_seconds/60:.0f}-minute window), base volatility:")
     head = summary[(summary["size_pct"] == default_size)
                    & (summary["vol_mult"] == 1.0)]
     for _, r in head.iterrows():
@@ -529,39 +684,8 @@ def main() -> int:
     model_frontier, sim_frontier = stage_frontier(cfg, ctx, summary, ic, stats,
                                                   default_size, log)
 
-    # Cross-section: the same order, eight names.
-    cross_ctx = {"cfg": cfg, "horizon": cfg.execution.horizon_seconds,
-                 "n_slices": cfg.execution.n_slices, "cross_size": 0.05,
-                 "start_fraction": 0.25, "flow": cal.flow,
-                 "cross": {t: {"stats": snap[t], "flow": cals[t].flow,
-                               "kyle": cals[t].kyle_lambda,
-                               "sigma_exo": cals[t].sigma_exo,
-                               "ac_params": ACParams(
-                                   X=1.0, T=cfg.execution.horizon_seconds,
-                                   N=cfg.execution.n_slices,
-                                   sigma=snap[t].sigma_per_second(
-                                       cfg.market.seconds_per_day),
-                                   eta=ic.eta * (stats.price / snap[t].price)
-                                   * (stats.adv_shares / snap[t].adv_shares),
-                                   gamma=ic.gamma * (stats.adv_shares
-                                                     / snap[t].adv_shares),
-                                   epsilon=ic.epsilon)}
-                           for t in snap.tickers}}
-    cross_seeds = list(range(30_000, 30_000 + (4 if args.quick else 80)))
-    cross_tasks = [(t, s) for t in snap.tickers for s in cross_seeds]
-    log(f"cross-section: {len(cross_tasks)} runs across {len(snap.tickers)} names")
-    cross_rows: List[Dict[str, float]] = []
-    if workers > 1:
-        with mp.Pool(workers, initializer=_init, initargs=(cross_ctx,)) as pool:
-            for part in pool.imap_unordered(_run_cross_section, cross_tasks,
-                                            chunksize=2):
-                cross_rows.extend(part)
-    else:
-        _init(cross_ctx)
-        for task in cross_tasks:
-            cross_rows.extend(_run_cross_section(task))
-    cross = pd.DataFrame(cross_rows)
-    cross.to_csv(RESULTS / "cross_section.csv", index=False, float_format="%.6g")
+    cross = stage_cross_section(cfg, snap, cals, cal, ic, stats, workers,
+                                args.quick, log)
 
     tape = stage_tape(cfg, ctx, stats, log)
     stage_figures(summary, ic, model_frontier, sim_frontier, cross, log)

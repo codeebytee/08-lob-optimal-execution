@@ -170,7 +170,14 @@ class ExecutionConfig:
 class SweepConfig:
     """The precomputed grid shipped to the page."""
 
-    sizes_pct_adv: Tuple[float, ...] = (0.01, 0.02, 0.05, 0.10, 0.20)
+    # Parent size as a fraction of *daily* ADV. The horizon is half an hour,
+    # which is 7.7% of the trading day, so 0.5% of ADV is about 6.5% of the
+    # volume that will print while the order is working - a normal institutional
+    # child of a larger parent. 2% of ADV in half an hour is roughly a quarter
+    # of the interval's volume, which is where the venue starts to fail to
+    # absorb the order at all. That failure is the point of the top of the grid.
+    sizes_pct_adv: Tuple[float, ...] = (0.001, 0.0025, 0.005, 0.01, 0.02)
+    default_size_pct_adv: float = 0.005
     lambdas: Tuple[float, ...] = (1.0e-7, 1.0e-6, 5.0e-6, 2.0e-5)
     vol_multipliers: Tuple[float, ...] = (0.5, 1.0, 2.0)
     paths: int = 300

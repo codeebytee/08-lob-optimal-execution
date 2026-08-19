@@ -204,6 +204,80 @@ def calibrate_venue(stats: NameStats, book: BookConfig, flow: FlowConfig,
         median_spread_ticks=final["spread"], mean_touch_lots=final["touch"])
 
 
+def impact_sample(stats: NameStats, book: BookConfig, cal: VenueCalibration,
+                  X: int, seed: int, horizon: float, n_slices: int,
+                  seconds_per_day: float = 23400.0,
+                  side: int = BUY) -> Dict[str, float]:
+    """One paired observation: a TWAP parent, and the same session without it.
+
+    Split out from :func:`measure_impact` so the calibration can be run across
+    processes - it is the expensive part of the whole pipeline, and it
+    parallelises perfectly because every sample is independent.
+    """
+    res = run_parent(stats, book, cal.flow, TWAP(), X, seed, horizon,
+                     n_slices, side=side, kyle_lambda=cal.kyle_lambda,
+                     sigma_exo=cal.sigma_exo, seconds_per_day=seconds_per_day)
+    base = baseline_path(stats, book, cal.flow, seed, horizon, n_slices,
+                         kyle_lambda=cal.kyle_lambda, sigma_exo=cal.sigma_exo,
+                         seconds_per_day=seconds_per_day)
+    # Control variate: what the same session would have cost on a flat schedule
+    # with no impact at all. Mean zero, and it removes most of the price-path
+    # noise from the cost estimate.
+    cv_usd = control_variate(base, side) * 1e-4 * base.arrival
+    return {"perm": side * (res.final_mid - base.final_mid),
+            "cost_per_share": res.shortfall_usd / X - cv_usd,
+            "fill": res.filled_shares / X}
+
+
+def fit_impact(stats: NameStats, cal: VenueCalibration,
+               rows: List[Dict[str, float]]) -> ImpactCalibration:
+    """Turn the per-participation summaries into gamma, eta and the exponent.
+
+    ``rows`` must carry ``X``, ``rate``, ``perm_usd`` and ``cost_per_share``.
+    See the module docstring for why gamma comes from the counterfactual and
+    only then eta from the residual: with a TWAP parent, size and rate are
+    collinear and a single regression cannot separate them.
+    """
+    X_arr = np.array([r["X"] for r in rows])
+    perm_arr = np.array([r["perm_usd"] for r in rows])
+    rate_arr = np.array([r["rate"] for r in rows])
+    cps_arr = np.array([r["cost_per_share"] for r in rows])
+
+    # gamma: permanent impact is linear in size through the origin, so the
+    # least-squares slope with no intercept is the estimator.
+    gamma = float(np.sum(perm_arr * X_arr) / np.sum(X_arr ** 2))
+
+    # epsilon: the model's fixed cost is the half spread. Taken from the
+    # venue's own measured spread rather than fitted, so that the regression
+    # has one free parameter and not two.
+    epsilon = 0.5 * cal.median_spread_ticks * stats.tick_size
+
+    resid = cps_arr - epsilon - 0.5 * gamma * X_arr
+    eta = float(np.sum(resid * rate_arr) / np.sum(rate_arr ** 2))
+    pred = epsilon + 0.5 * gamma * X_arr + eta * rate_arr
+    ss_res = float(np.sum((cps_arr - pred) ** 2))
+    ss_tot = float(np.sum((cps_arr - cps_arr.mean()) ** 2))
+    linear_r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    # Is temporary impact really linear in the rate? Fit resid = a rate**b in
+    # logs. The closed form assumes b = 1; the square-root law says b = 1/2.
+    ok = (resid > 0) & (rate_arr > 0)
+    if int(ok.sum()) >= 3:
+        lx, ly = np.log(rate_arr[ok]), np.log(resid[ok])
+        b, a = np.polyfit(lx, ly, 1)
+        fit = a + b * lx
+        denom = float(np.sum((ly - ly.mean()) ** 2))
+        exp_r2 = 1.0 - float(np.sum((ly - fit) ** 2)) / denom if denom > 0 else float("nan")
+        exponent, exponent_r2 = float(b), float(exp_r2)
+    else:
+        exponent, exponent_r2 = float("nan"), float("nan")
+
+    return ImpactCalibration(ticker=stats.ticker, gamma=gamma, eta=eta,
+                             epsilon=epsilon, exponent=exponent,
+                             exponent_r2=exponent_r2, linear_r2=linear_r2,
+                             rows=rows)
+
+
 def measure_impact(stats: NameStats, book: BookConfig, cal: VenueCalibration,
                    participations: Sequence[float], paths: int,
                    horizon: float, n_slices: int, base_seed: int = 5000,
@@ -215,81 +289,38 @@ def measure_impact(stats: NameStats, book: BookConfig, cal: VenueCalibration,
     expected volume over the horizon is run against ``paths`` seeds, and each
     seed is *also* run with no parent order at all. Everything is measured as a
     difference between the pair.
+
+    Single-process; ``scripts/make_results.py`` spreads the same samples across
+    cores via :func:`impact_sample` and :func:`fit_impact`.
     """
     lot = book.lot_size
     expected_volume = cal.sim_adv_shares * horizon / seconds_per_day
     rows: List[Dict[str, float]] = []
-
     for rho in participations:
         X = int(round(max(rho * expected_volume, lot) / lot) * lot)
-        perm, per_share, done = [], [], []
-        for i in range(paths):
-            seed = base_seed + i
-            res = run_parent(stats, book, cal.flow, TWAP(), X, seed, horizon,
-                             n_slices, side=side, kyle_lambda=cal.kyle_lambda,
-                             sigma_exo=cal.sigma_exo,
-                             seconds_per_day=seconds_per_day)
-            base = baseline_path(stats, book, cal.flow, seed, horizon, n_slices,
-                                 kyle_lambda=cal.kyle_lambda,
-                                 sigma_exo=cal.sigma_exo,
-                                 seconds_per_day=seconds_per_day)
-            perm.append(side * (res.final_mid - base.final_mid))
-            # Control variate: the same session without the order would have
-            # cost this much on a flat schedule, and it has mean zero.
-            cv_usd = control_variate(base, side) * 1e-4 * base.arrival
-            per_share.append(res.shortfall_usd / X - cv_usd)
-            done.append(res.filled_shares / X)
-        v = X / horizon
-        rows.append({"participation": float(rho), "X": float(X),
-                     "rate": float(v),
-                     "perm_usd": float(np.mean(perm)),
-                     "perm_se": float(np.std(perm, ddof=1) / math.sqrt(paths)),
-                     "cost_per_share": float(np.mean(per_share)),
-                     "cost_se": float(np.std(per_share, ddof=1) / math.sqrt(paths)),
-                     "fill_rate": float(np.mean(done))})
+        samples = [impact_sample(stats, book, cal, X, base_seed + i, horizon,
+                                 n_slices, seconds_per_day, side)
+                   for i in range(paths)]
+        rows.append(summarise_impact_samples(rho, X, horizon, samples))
+    return fit_impact(stats, cal, rows)
 
-    X_arr = np.array([r["X"] for r in rows])
-    perm_arr = np.array([r["perm_usd"] for r in rows])
-    rate_arr = np.array([r["rate"] for r in rows])
-    cps_arr = np.array([r["cost_per_share"] for r in rows])
 
-    # gamma: permanent impact is linear in size through the origin, so the
-    # least-squares slope with no intercept is the estimator.
-    gamma = float(np.sum(perm_arr * X_arr) / np.sum(X_arr ** 2))
-
-    # epsilon: the model's fixed cost is the half spread plus fees, and it is
-    # the intercept of the per-share cost as the rate goes to zero. Taken from
-    # the venue's own measured spread rather than fitted, so that the fit has
-    # one free parameter and not two.
-    epsilon = 0.5 * cal.median_spread_ticks * stats.tick_size
-
-    resid = cps_arr - epsilon - 0.5 * gamma * X_arr
-    eta = float(np.sum(resid * rate_arr) / np.sum(rate_arr ** 2))
-    pred = epsilon + 0.5 * gamma * X_arr + eta * rate_arr
-    ss_res = float(np.sum((cps_arr - pred) ** 2))
-    ss_tot = float(np.sum((cps_arr - cps_arr.mean()) ** 2))
-    linear_r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-
-    # The exponent: is temporary impact really linear in the rate? Fit
-    # resid = a * rate**b in logs. AC assumes b = 1; the square-root law says
-    # b = 1/2. The answer for this venue is in results/impact_calibration.csv.
-    ok = (resid > 0) & (rate_arr > 0)
-    if ok.sum() >= 3:
-        lx = np.log(rate_arr[ok])
-        ly = np.log(resid[ok])
-        b, a = np.polyfit(lx, ly, 1)
-        fit = a + b * lx
-        exp_r2 = 1.0 - float(np.sum((ly - fit) ** 2)) / float(
-            np.sum((ly - ly.mean()) ** 2))
-        exponent, exponent_r2 = float(b), float(exp_r2)
-    else:
-        exponent, exponent_r2 = float("nan"), float("nan")
-
-    return ImpactCalibration(ticker=stats.ticker, gamma=gamma, eta=eta,
-                             epsilon=epsilon, exponent=exponent,
-                             exponent_r2=exponent_r2, linear_r2=linear_r2,
-                             rows=rows)
+def summarise_impact_samples(rho: float, X: int, horizon: float,
+                             samples: Sequence[Dict[str, float]]) -> Dict[str, float]:
+    """Mean and standard error of one participation rate's samples."""
+    n = max(len(samples), 1)
+    perm = np.array([s["perm"] for s in samples], dtype=float)
+    cps = np.array([s["cost_per_share"] for s in samples], dtype=float)
+    fill = np.array([s["fill"] for s in samples], dtype=float)
+    return {"participation": float(rho), "X": float(X),
+            "rate": float(X / horizon),
+            "perm_usd": float(perm.mean()),
+            "perm_se": float(perm.std(ddof=1) / math.sqrt(n)) if n > 1 else 0.0,
+            "cost_per_share": float(cps.mean()),
+            "cost_se": float(cps.std(ddof=1) / math.sqrt(n)) if n > 1 else 0.0,
+            "fill_rate": float(fill.mean())}
 
 
 __all__ = ["VenueCalibration", "ImpactCalibration", "scale_flow",
-           "kyle_lambda_guess", "calibrate_venue", "measure_impact"]
+           "kyle_lambda_guess", "calibrate_venue", "measure_impact",
+           "impact_sample", "fit_impact", "summarise_impact_samples"]

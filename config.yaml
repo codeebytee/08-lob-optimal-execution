@@ -109,7 +109,12 @@ execution:
 sweep:
   # The precomputed grid the page ships. 5 sizes x 3 vol regimes x 9 algorithm
   # variants x 150 paths, all on common random numbers.
-  sizes_pct_adv: [0.01, 0.02, 0.05, 0.10, 0.20]
+  # Parent size as a fraction of DAILY ADV, worked over a 30-minute horizon
+  # (7.7% of the trading day). So 0.5% of ADV is ~6.5% of the volume expected
+  # while the order is live, and 2% of ADV is ~26% of it - past the point where
+  # the venue can absorb the order, which is deliberately inside the grid.
+  sizes_pct_adv: [0.001, 0.0025, 0.005, 0.01, 0.02]
+  default_size_pct_adv: 0.005
   lambdas: [1.0e-7, 1.0e-6, 1.0e-5]
   vol_multipliers: [0.5, 1.0, 2.0]
   paths: 150

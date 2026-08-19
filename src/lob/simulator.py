@@ -174,8 +174,7 @@ class MarketSimulator:
         self._exo_path = np.zeros(0)
         self._exo_t_max = -1.0
         self._exo_last = 0.0
-        self._pending_t: Optional[float] = None
-        self._pending_bound = 0.0
+        self._pending_e: Optional[float] = None
 
     # -- helpers -----------------------------------------------------------
 
@@ -444,30 +443,27 @@ class MarketSimulator:
                 self._maybe_record(self.t)
                 continue
 
-            # A candidate time that lands past the end of the call is kept,
-            # not discarded. Discarding it and redrawing on the next call is
+            # The unused part of an exponential wait is carried across calls
+            # rather than thrown away. Discarding it and redrawing would be
             # statistically harmless - exponential waits are memoryless - but
             # it makes the event stream depend on *how the caller chopped up
             # time*, and this simulator is driven with different chopping by
-            # the baseline run (slice boundaries) and the execution run (chunk
-            # boundaries). Keeping the draw makes run_until a pure function of
-            # its end time, so the paired runs stay aligned for as long as the
-            # agent has not actually done anything.
-            if (self._pending_t is not None and self._pending_t > self.t
-                    and bound <= self._pending_bound + 1e-12):
-                t_new = self._pending_t
-                bound = self._pending_bound
-            else:
-                t_new = self.t - math.log(self._uniform()) / bound
-            self._pending_t = None
+            # the baseline run (slice boundaries) and by the execution run
+            # (chunk boundaries within each slice). Carrying the residual in
+            # units of the standard exponential, so that it stays valid when
+            # the rate changes, makes run_until a pure function of its end
+            # time: two runs stay in lockstep for exactly as long as the agent
+            # has not done anything.
+            e = self._pending_e if self._pending_e is not None else -math.log(self._uniform())
+            self._pending_e = None
+            t_new = self.t + e / bound
 
             if t_new >= horizon:
+                used = (horizon - self.t) * bound
+                self._pending_e = max(e - used, 0.0)
                 self._advance_price(horizon - self.t)
                 self.t = horizon
                 self._maybe_record(self.t)
-                if horizon >= t_end:
-                    self._pending_t = t_new
-                    self._pending_bound = bound
                 continue
 
             self._advance_price(t_new - self.t)

@@ -1,0 +1,1346 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limit Order Book Simulator &amp; Optimal Execution</title>
+<script src="vendor/plotly-cartesian.min.js"></script>
+<script>
+/* The vendored copy is the primary source: this page has to work with the wifi
+   off, opened straight from the filesystem. The CDN below is only a repair
+   path for a checkout where the vendor file went missing. */
+if (typeof Plotly === 'undefined') {
+  document.write('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"><\/script>');
+}
+</script>
+<script src="data.js"></script>
+<style>
+:root{
+  --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --ink:#e6edf3; --dim:#8b98a9;
+  --line:#2a3240; --accent:#4c9be8; --good:#3fb950; --warn:#e3b341; --bad:#f85149;
+  --a1:#4c9be8; --a2:#bc8cff; --a3:#3fb950; --a4:#e3b341; --a5:#ff8b5e;
+  --grid:#232b38;
+}
+html[data-theme="light"]{
+  --bg:#f7f9fc; --panel:#ffffff; --panel2:#eef2f7; --ink:#131820; --dim:#5b6675;
+  --line:#d8e0ea; --accent:#1f6feb; --good:#1a7f37; --warn:#9a6700; --bad:#cf222e;
+  --a1:#1f6feb; --a2:#8250df; --a3:#1a7f37; --a4:#9a6700; --a5:#bc4c00;
+  --grid:#e3e9f1;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--accent)}
+header{padding:20px 20px 10px;border-bottom:1px solid var(--line)}
+h1{margin:0 0 4px;font-size:21px;letter-spacing:-0.2px}
+.sub{color:var(--dim);font-size:13px;max-width:76ch}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+button{font:inherit;cursor:pointer;background:var(--panel2);color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:6px 11px}
+button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+nav{display:flex;gap:6px;padding:12px 20px;flex-wrap:wrap;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:var(--bg);z-index:5}
+main{padding:18px 20px 60px;max-width:1500px;margin:0 auto}
+.tab{display:none}.tab.on{display:block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card h3{margin:0 0 8px;font-size:14px;letter-spacing:.02em}
+.controls{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  align-items:end}
+label{display:block;font-size:12px;color:var(--dim);margin-bottom:3px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+select,input[type=number]{width:100%;background:var(--panel2);color:var(--ink);
+  border:1px solid var(--line);border-radius:6px;padding:5px 7px;font:inherit}
+.val{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:600}
+.plot{width:100%;height:340px}
+.plot.tall{height:420px}
+.plot.short{height:250px}
+details{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+summary{cursor:pointer;color:var(--dim);font-size:12.5px;user-select:none}
+details p{margin:8px 0 0;color:var(--dim);font-size:12.5px;max-width:80ch}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+th,td{padding:5px 7px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--dim);font-weight:600;position:sticky;top:0;background:var(--panel)}
+tr.hi td{background:rgba(76,155,232,.10)}
+.scroll{overflow:auto;max-height:430px}
+.kpis{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.kpi .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.kpi .v{font-size:19px;font-weight:650;font-variant-numeric:tabular-nums;margin-top:2px}
+.note{border-left:3px solid var(--warn);background:var(--panel2);padding:8px 11px;
+  border-radius:0 7px 7px 0;font-size:12.5px;color:var(--dim);margin-top:10px}
+.note.bad{border-left-color:var(--bad)}
+.note.ok{border-left-color:var(--good)}
+.pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;
+  border:1px solid var(--line);color:var(--dim);margin-left:6px;vertical-align:1px}
+.pill.live{border-color:var(--good);color:var(--good)}
+.pill.pre{border-color:var(--a2);color:var(--a2)}
+footer{border-top:1px solid var(--line);padding:16px 20px 40px;color:var(--dim);font-size:12px}
+.ladder{width:100%;font-size:12px;font-variant-numeric:tabular-nums;border-collapse:collapse}
+.ladder td{border:none;padding:1px 6px}
+.ladder .bar{height:13px;border-radius:3px;display:block}
+.ladder .bidbar{background:var(--a3);opacity:.75}
+.ladder .askbar{background:var(--bad);opacity:.7}
+.ladder .mid td{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  color:var(--dim)}
+.rowflex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+@media (max-width:640px){ .plot{height:290px} h1{font-size:18px} main{padding:14px 12px 50px} }
+</style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <div>
+      <h1>Limit order book simulator &amp; optimal execution</h1>
+      <div class="sub">A parent order worked through a simulated book with queue priority, Hawkes-clustered
+        order flow and a latent efficient price &mdash; then measured against the Almgren&ndash;Chriss cost
+        model calibrated to that same book. Move anything; the schedule math recomputes in your browser.</div>
+    </div>
+    <div class="rowflex">
+      <button id="bTheme" title="light / dark">theme</button>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="book" class="on">Live book</button>
+  <button data-tab="sched">Schedules</button>
+  <button data-tab="frontier">Efficient frontier</button>
+  <button data-tab="costs">Cost distributions</button>
+  <button data-tab="calib">Calibration</button>
+  <button data-tab="stress">Break it</button>
+</nav>
+
+<main>
+
+<!-- ================================================================== BOOK -->
+<section class="tab on" id="tab-book">
+  <div class="kpis" id="bookKpis"></div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>The book, as the order works <span class="pill pre">recorded run</span></h3>
+      <div class="rowflex" style="margin:6px 0 10px">
+        <button id="bPlay">play</button>
+        <button id="bStep">step</button>
+        <button id="bReset">restart</button>
+        <div style="flex:1;min-width:160px">
+          <input type="range" id="cFrame" min="0" max="10" value="0" step="1">
+        </div>
+        <span class="val" id="lFrame">t = 0s</span>
+      </div>
+      <table class="ladder" id="ladder"></table>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Every row is one price level of the order book. Green bars on the lower half are bids
+        (buyers), red bars on the upper half are asks (sellers), and the bar length is how many
+        shares are queued there. The dashed line is the efficient price the market is quoting
+        around. As the recorded buy programme works, watch the ask side thin out where the child
+        orders are eating it, and watch new quotes appear a moment later as market makers replace
+        the liquidity they lost. That refill delay is the whole reason a large order cannot simply
+        be sent at once.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Price and progress</h3>
+      <div id="pBookPx" class="plot"></div>
+      <div id="pBookFill" class="plot short"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Top: the mid price during the execution, with the average price paid so far marked.
+        The gap between the two is implementation shortfall, and it is what the whole project is
+        about. Bottom: shares completed against the schedule the algorithm intended. A gap that
+        opens up means the book could not absorb the child orders as fast as the plan wanted.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== SCHEDULES -->
+<section class="tab" id="tab-sched">
+  <div class="card">
+    <h3>Parent order <span class="pill live">recomputed live</span></h3>
+    <div class="controls">
+      <div><label>name</label><select id="cName"></select></div>
+      <div><label>parent size <span class="val" id="lSize"></span></label>
+        <input type="range" id="cSize" min="0.0002" max="0.04" step="0.0002" value="0.005"></div>
+      <div><label>horizon <span class="val" id="lHor"></span></label>
+        <input type="range" id="cHor" min="300" max="7200" step="60" value="1800"></div>
+      <div><label>urgency &lambda; <span class="val" id="lLam"></span></label>
+        <input type="range" id="cLam" min="-9" max="-3.5" step="0.05" value="-6"></div>
+      <div><label>volatility multiplier <span class="val" id="lVol"></span></label>
+        <input type="range" id="cVol" min="0.2" max="4" step="0.1" value="1"></div>
+      <div><label>POV participation <span class="val" id="lPov"></span></label>
+        <input type="range" id="cPov" min="0.02" max="0.5" step="0.01" value="0.15"></div>
+    </div>
+    <div class="kpis" id="schedKpis" style="margin-top:12px"></div>
+    <div id="schedNote"></div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>Trading trajectories</h3>
+      <div id="pTraj" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Shares still to buy, against time. TWAP is the straight line: trade the same amount
+        every minute. The Almgren&ndash;Chriss curve bends below it, and the more urgent you are
+        (higher &lambda;) the harder it bends &mdash; you pay more impact to spend less time exposed
+        to the price moving against you. Push &lambda; to the bottom of its range and the curve
+        becomes the straight line: a trader who does not care about risk should trade uniformly,
+        and the model says so.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Cost decomposition <span class="pill live">closed form</span></h3>
+      <div id="pDecomp" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Where the expected cost comes from, in basis points of the order's value.
+        <em>Permanent</em> is the price move your order leaves behind &mdash; it depends on how much
+        you trade, never on how you slice it, so it is the same bar for every algorithm.
+        <em>Spread</em> is the half-spread and fees paid on each share. <em>Temporary</em> is the
+        extra you pay for trading fast, and it is the only part any schedule can change. The line
+        marks one standard deviation of the total cost: notice that it falls as the temporary
+        cost rises. That trade is the entire subject of the next tab.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ FRONTIER -->
+<section class="tab" id="tab-frontier">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Efficient frontier <span class="pill live">live</span> <span class="pill pre">+ simulated points</span></h3>
+      <div id="pFrontier" class="plot tall"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Each point on the line is the best you can do at some level of tolerance for cost
+        uncertainty: move right and you accept a wider range of outcomes in exchange for a lower
+        expected cost. No strategy exists below and to the left of the line, and any strategy above
+        it is being beaten by one on it. The markers are what the same schedules actually cost when
+        run through the microstructure simulator, so the vertical gap between a marker and the line
+        is the model's error &mdash; the honest measure of how much the closed form can be trusted.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Urgency, in units a trader uses</h3>
+      <div id="pKappa" class="plot"></div>
+      <div class="scroll" style="margin-top:8px"><table id="tFrontier"></table></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>&lambda; is in inverse dollars and nobody has intuition for it. The useful translation is
+        the half-life &mdash; the time by which the order is half finished. The table shows the same
+        frontier read as: pick how quickly you want to be half done, and this is the expected cost
+        and cost dispersion that choice implies.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== COSTS -->
+<section class="tab" id="tab-costs">
+  <div class="card">
+    <h3>Shortfall distributions <span class="pill pre">precomputed simulation</span></h3>
+    <div class="controls">
+      <div><label>parent size (% of ADV)</label><select id="cGridSize"></select></div>
+      <div><label>volatility regime</label><select id="cGridVol"></select></div>
+      <div><label>statistic for the bars</label>
+        <select id="cStat">
+          <option value="mean_bps">mean cost (bp)</option>
+          <option value="cvar95_bps">CVaR 95% (bp)</option>
+          <option value="stdev_bps">cost dispersion (bp)</option>
+          <option value="fill_rate">fill rate</option>
+          <option value="vs_vwap_bps">vs market VWAP (bp)</option>
+        </select></div>
+    </div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>Distribution of implementation shortfall</h3>
+      <div id="pHist" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>One histogram per algorithm, over identical simulated sessions &mdash; every algorithm saw
+        the same order flow and the same price path, which is what makes the comparison fair.
+        Positive is cost. The distributions overlap heavily, and that is the point: the spread of
+        outcomes on a single order dwarfs the difference between algorithms, which is why execution
+        quality is judged over hundreds of orders and never over one.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Ranking</h3>
+      <div id="pBars" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>The same runs, summarised. Switch the statistic to see the ranking change: an algorithm
+        that wins on the mean can lose badly on the tail, and the one that finishes the order at any
+        cost looks worst on cost and best on fill rate. Error bars are the standard error of the
+        mean after the control variate described in the calibration tab.</p>
+      </details>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>Every run in the grid</h3>
+    <div class="scroll"><table id="tCosts"></table></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>Same order, eight names <span class="pill pre">precomputed</span></h3>
+    <div id="pCross" class="plot"></div>
+    <details>
+      <summary>What am I looking at?</summary>
+      <p>An order sized to the same fraction of each name's daily volume, executed in each name's
+      calibrated venue. The cost differences across names are almost entirely a story about the
+      ratio of volatility to liquidity: the same relative order is far more expensive in a name
+      that moves a lot and trades little.</p>
+    </details>
+  </div>
+</section>
+
+<!-- ========================================================= CALIBRATION -->
+<section class="tab" id="tab-calib">
+  <div class="kpis" id="calibKpis"></div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>Impact measured from the simulator <span class="pill pre">precomputed</span></h3>
+      <div id="pImpact" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>The Almgren&ndash;Chriss cost model needs two numbers: how far a trade moves the price
+        permanently, and how much extra it costs to trade quickly. Neither was assumed. Each was
+        measured by running parent orders through the simulator and comparing against the identical
+        session with no order in it &mdash; a counterfactual, which is the only way to separate a
+        price move you caused from one that was going to happen anyway. Left: permanent impact
+        against order size, with the fitted slope. Right: the cost of speed against trading rate,
+        on log axes, with the linear model the closed form assumes.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>The venue against the real names <span class="pill pre">precomputed</span></h3>
+      <div class="scroll"><table id="tVenue"></table></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Each name's simulated session is checked against the daily data it was calibrated to:
+        does it print the right daily volume, and does its mid price move with the right
+        volatility? The last two columns are what the simulator produced but nobody targeted &mdash;
+        the spread and the depth at the touch emerge from the order flow model rather than being
+        set, and they land in the range these names actually quote.</p>
+      </details>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h3>What free daily data cannot tell you about the spread</h3>
+    <div id="pSpread" class="plot short"></div>
+    <details open>
+      <summary>What am I looking at?</summary>
+      <p>Two published estimators that recover an effective spread from daily high/low/close bars,
+      applied to these eight names, against the one-tick spread these names actually quote. Both are
+      implemented correctly &mdash; the test suite recovers a known spread from a synthetic Roll model
+      with both &mdash; and both are useless here, disagreeing with the truth and with each other by
+      one to two orders of magnitude. The reason is structural: they assume the daily range is
+      dominated by the spread, and for a name with a 90 bp daily range and a 0.13 bp spread it is
+      dominated by volatility instead. So this project does not take its spread from daily bars. It
+      seeds the book at one tick and lets the order flow decide, and this chart is here as the
+      reason rather than being quietly omitted.</p>
+    </details>
+  </div>
+</section>
+
+<!-- ============================================================== STRESS -->
+<section class="tab" id="tab-stress">
+  <div class="card">
+    <h3>Push the model until it breaks <span class="pill live">live</span></h3>
+    <div class="controls">
+      <div><label>parent size <span class="val" id="lSSize"></span></label>
+        <input type="range" id="cSSize" min="0.0002" max="0.08" step="0.0002" value="0.005"></div>
+      <div><label>horizon <span class="val" id="lSHor"></span></label>
+        <input type="range" id="cSHor" min="60" max="3600" step="30" value="1800"></div>
+      <div><label>slices <span class="val" id="lSN"></span></label>
+        <input type="range" id="cSN" min="1" max="120" step="1" value="30"></div>
+      <div><label>volatility multiplier <span class="val" id="lSVol"></span></label>
+        <input type="range" id="cSVol" min="0" max="6" step="0.1" value="1"></div>
+      <div><label>urgency &lambda; <span class="val" id="lSLam"></span></label>
+        <input type="range" id="cSLam" min="-9" max="-2.5" step="0.05" value="-6"></div>
+      <div><label>impact &eta; multiplier <span class="val" id="lSEta"></span></label>
+        <input type="range" id="cSEta" min="0.05" max="8" step="0.05" value="1"></div>
+    </div>
+    <div id="stressNotes" style="margin-top:12px"></div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card">
+      <h3>Live Monte Carlo of the reduced-form model <span class="pill live">runs in your browser</span></h3>
+      <div class="rowflex" style="margin-bottom:8px">
+        <div style="flex:1;min-width:180px">
+          <label>paths <span class="val" id="lPaths">2000</span></label>
+          <input type="range" id="cPaths" min="200" max="6000" step="200" value="2000">
+        </div>
+        <button id="bRunMC">re-run</button>
+      </div>
+      <div id="pMC" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>The same five algorithms, simulated here and now against the <em>model's own</em> price
+        and cost dynamics rather than against the order book. It takes a few hundred milliseconds,
+        which is exactly why this can respond to a slider while the book simulation cannot. Compare
+        the numbers with the precomputed ones on the cost tab: where they agree, the closed form is
+        a fair description of the venue; where they disagree, the microstructure is doing something
+        the model has no way to express &mdash; a finite book that runs out, and clustered flow that
+        arrives when it wants to rather than when the schedule wants it.</p>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Where the venue stops absorbing the order <span class="pill pre">precomputed</span></h3>
+      <div id="pCapacity" class="plot"></div>
+      <details>
+        <summary>What am I looking at?</summary>
+        <p>Fill rate and cost against parent size, from the full order book simulation. Below about
+        half a percent of a day's volume in half an hour, everything completes and costs grow
+        roughly linearly. Past that the book cannot supply the shares inside the horizon: the fill
+        rate falls, the cost curve bends upward, and the unfilled remainder gets charged at
+        whatever the price did &mdash; which is the cost that closed-form models, all of which assume
+        the order can always be executed, simply do not have a term for.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div id="footNote"></div>
+</footer>
+
+<script>
+"use strict";
+/* ==========================================================================
+   The port. Everything in this block is a JavaScript implementation of maths
+   that also exists in Python under src/. It is kept in one place, above the
+   application code, so the pairing is easy to check - and it is checked, by
+   scripts/check_page.py, which extracts this block, runs it under Node against
+   the same inputs, and compares to what src/ returns.
+   ========================================================================== */
+const V = {
+
+  /* ---- Almgren-Chriss, discrete form ---------------------------------- */
+
+  etaTilde(p){ return p.eta - 0.5 * p.gamma * (p.T / p.N); },
+
+  /* cosh(kappa tau) = 1 + lambda sigma^2 tau^2 / (2 eta~).
+     Solved with acosh rather than the kappa^2 ~ lambda sigma^2 / eta~
+     approximation: at these interval lengths the two differ by a few percent
+     and the difference lands directly in the cost. */
+  kappa(p, lam){
+    if(!(lam > 0)) return 0;
+    const tau = p.T / p.N, et = V.etaTilde(p);
+    if(!(et > 0)) return NaN;
+    const arg = 1 + lam * p.sigma * p.sigma * tau * tau / (2 * et);
+    return Math.acosh(arg) / tau;
+  },
+
+  trajectory(p, lam){
+    const k = V.kappa(p, lam), N = p.N, tau = p.T / N;
+    const t = new Float64Array(N + 1), x = new Float64Array(N + 1);
+    for(let j = 0; j <= N; j++){
+      t[j] = j * tau;
+      x[j] = (k > 0)
+        ? p.X * Math.sinh(k * (p.T - t[j])) / Math.sinh(k * p.T)
+        : p.X * (1 - t[j] / p.T);
+    }
+    x[N] = 0;
+    const n = new Float64Array(N);
+    for(let j = 0; j < N; j++) n[j] = x[j] - x[j + 1];
+    return {t, x, n, kappa: k};
+  },
+
+  expectedCost(p, n){
+    const tau = p.T / p.N, et = V.etaTilde(p);
+    let s1 = 0, s2 = 0;
+    for(let i = 0; i < n.length; i++){ s1 += Math.abs(n[i]); s2 += n[i] * n[i]; }
+    return 0.5 * p.gamma * p.X * p.X + p.epsilon * s1 + (et / tau) * s2;
+  },
+
+  costParts(p, n){
+    const tau = p.T / p.N, et = V.etaTilde(p);
+    let s1 = 0, s2 = 0;
+    for(let i = 0; i < n.length; i++){ s1 += Math.abs(n[i]); s2 += n[i] * n[i]; }
+    return {perm: 0.5 * p.gamma * p.X * p.X,
+            spread: p.epsilon * s1,
+            temp: (et / tau) * s2};
+  },
+
+  costVariance(p, x){
+    const tau = p.T / p.N;
+    let s = 0;
+    for(let j = 1; j < x.length; j++) s += x[j] * x[j];
+    return p.sigma * p.sigma * tau * s;
+  },
+
+  solve(p, lam){
+    const tr = V.trajectory(p, lam);
+    const ec = V.expectedCost(p, tr.n), vc = V.costVariance(p, tr.x);
+    return {t: tr.t, x: tr.x, n: tr.n, kappa: tr.kappa,
+            halfLife: tr.kappa > 0 ? Math.LN2 / tr.kappa : Infinity,
+            cost: ec, variance: vc, stdev: Math.sqrt(Math.max(vc, 0))};
+  },
+
+  scheduleCost(p, n){
+    const x = new Float64Array(n.length + 1);
+    x[0] = p.X;
+    for(let i = 0; i < n.length; i++) x[i + 1] = x[i] - n[i];
+    const ec = V.expectedCost(p, n), vc = V.costVariance(p, x);
+    return {cost: ec, variance: vc, stdev: Math.sqrt(Math.max(vc, 0)), x};
+  },
+
+  bps(costUsd, X, price){ return (X * price) ? 1e4 * costUsd / (X * price) : NaN; },
+
+  /* ---- the intraday volume curve, same form as src/utils/config.py ----- */
+  uShape(u, c){
+    const shape = c.u_a + c.u_b * (Math.pow(1 - u, c.u_p) + Math.pow(u, c.u_p));
+    const mean = c.u_a + 2 * c.u_b / (c.u_p + 1);
+    return shape / mean;
+  },
+
+  /* ---- the five schedules, as plans over N slices ---------------------- */
+
+  planTWAP(p){
+    const n = new Float64Array(p.N).fill(p.X / p.N);
+    return n;
+  },
+
+  planVWAP(p, curve){
+    const w = new Float64Array(p.N);
+    let s = 0;
+    for(let k = 0; k < p.N; k++){ w[k] = curve[k]; s += curve[k]; }
+    for(let k = 0; k < p.N; k++) w[k] = p.X * w[k] / s;
+    return w;
+  },
+
+  planAC(p, lam){ return V.trajectory(p, lam).n; },
+
+  /* ---- reduced-form Monte Carlo ---------------------------------------
+     The model's own dynamics, not the order book: price is a random walk
+     pushed by permanent impact, and each slice pays the fixed cost plus a
+     temporary impact linear in the rate. This is what the page can afford to
+     run live, and comparing it with the precomputed order book results is the
+     point of the exercise rather than a shortcut. */
+  mc(p, opts){
+    const N = p.N, tau = p.T / N, paths = opts.paths | 0;
+    const sq = Math.sqrt(tau), et = V.etaTilde(p);
+    const curve = opts.curve, povRate = opts.pov, tilt = opts.tilt;
+    const acN = V.planAC(p, opts.lam), vwapN = V.planVWAP(p, curve);
+    const names = ["TWAP", "VWAP", "POV", "AC", "Adaptive"];
+    const out = {};
+    names.forEach(nm => out[nm] = new Float64Array(paths));
+    const rand = V.rng(opts.seed || 12345);
+    const gauss = () => {
+      // Box-Muller. One spare is discarded; the cost is irrelevant next to the
+      // clarity of not carrying state across calls.
+      let u = 0, v = 0;
+      while(u === 0) u = rand();
+      while(v === 0) v = rand();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    };
+    const meanVol = opts.intervalVolume / N;
+
+    for(let q = 0; q < paths; q++){
+      // One price path, shared by all five algorithms on this iteration -
+      // the same common-random-numbers trick the Python side uses.
+      const xi = new Float64Array(N);
+      for(let k = 0; k < N; k++) xi[k] = gauss();
+      const vol = new Float64Array(N);
+      for(let k = 0; k < N; k++){
+        // Lognormal volume around the forecast curve: VWAP's tracking error
+        // has to come from somewhere, and this is the honest place for it.
+        vol[k] = meanVol * curve[k] * Math.exp(0.45 * gauss() - 0.10);
+      }
+      for(const nm of names){
+        let S = p.S0, remaining = p.X, cost = 0, prevVol = 0;
+        for(let k = 0; k < N; k++){
+          let nk;
+          if(nm === "TWAP") nk = remaining / (N - k);
+          else if(nm === "VWAP") nk = vwapN[k];
+          else if(nm === "AC") nk = acN[k];
+          else if(nm === "POV"){
+            nk = (k === N - 1) ? remaining
+               : Math.min(remaining, Math.max(povRate * prevVol, 0));
+          } else {
+            // Adaptive: re-solve on what is left, then tilt by the price move
+            // so far measured in standard deviations.
+            const left = N - k;
+            const q2 = {X: remaining, T: tau * left, N: left, sigma: p.sigma,
+                        eta: p.eta, gamma: p.gamma, epsilon: p.epsilon};
+            const base = (left > 1) ? V.trajectory(q2, opts.lam).n[0] : remaining;
+            const el = k * tau;
+            let z = (el > 0 && p.sigma > 0) ? -(S - p.S0) / (p.sigma * Math.sqrt(el)) : 0;
+            let m = 1 + tilt * z;
+            m = Math.min(Math.max(m, 0.2), 1.8);
+            nk = base * m;
+          }
+          nk = Math.min(Math.max(nk, 0), remaining);
+          if(k === N - 1) nk = remaining;
+          const v = nk / tau;
+          // Execution price for a buy: the prevailing price plus the fixed cost
+          // and the temporary impact of trading at rate v.
+          const exec = S + p.epsilon + p.eta * v;
+          cost += nk * (exec - p.S0);
+          // The price then moves: permanent impact of what we just did, plus
+          // the market's own move over the interval.
+          S += p.sigma * sq * xi[k] - p.gamma * nk;
+          remaining -= nk;
+          prevVol = vol[k];
+        }
+        out[nm][q] = 1e4 * cost / (p.X * p.S0);
+      }
+    }
+    return out;
+  },
+
+  /* Deterministic RNG so the page redraws identically on every reload:
+     mulberry32, 32 bits of state, adequate for a display Monte Carlo. */
+  rng(seed){
+    let a = seed >>> 0;
+    return function(){
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  },
+
+  stats(arr){
+    const a = Array.from(arr).filter(Number.isFinite).sort((x, y) => x - y);
+    if(!a.length) return {mean: NaN, sd: NaN, p05: NaN, p95: NaN, cvar: NaN, n: 0};
+    let s = 0; for(const v of a) s += v;
+    const mean = s / a.length;
+    let v2 = 0; for(const v of a) v2 += (v - mean) * (v - mean);
+    const sd = Math.sqrt(v2 / Math.max(a.length - 1, 1));
+    const q = f => a[Math.min(a.length - 1, Math.max(0, Math.floor(f * (a.length - 1))))];
+    const cut = Math.floor(0.95 * a.length);
+    let ts = 0, tn = 0;
+    for(let i = cut; i < a.length; i++){ ts += a[i]; tn++; }
+    return {mean, sd, p05: q(0.05), p50: q(0.5), p95: q(0.95),
+            cvar: tn ? ts / tn : a[a.length - 1], n: a.length};
+  }
+};
+
+/* ==========================================================================
+   Application
+   ========================================================================== */
+const D = window.DATA;
+const C = D.config;
+const COLORS = {TWAP: "var(--a1)", VWAP: "var(--a2)", POV: "var(--a4)",
+                AC: "var(--a3)", Adaptive: "var(--a5)"};
+const HEX = {TWAP: "#4c9be8", VWAP: "#bc8cff", POV: "#e3b341",
+             AC: "#3fb950", Adaptive: "#ff8b5e"};
+const ALGOS = ["TWAP", "VWAP", "POV", "AC", "Adaptive"];
+const UCURVE = {u_a: 0.62, u_b: 0.95, u_p: 3.0};
+
+function css(v){ return getComputedStyle(document.documentElement)
+  .getPropertyValue(v).trim(); }
+
+function layout(extra){
+  const base = {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: {color: css("--ink"), size: 11},
+    margin: {l: 58, r: 16, t: 26, b: 44},
+    xaxis: {gridcolor: css("--grid"), zerolinecolor: css("--line")},
+    yaxis: {gridcolor: css("--grid"), zerolinecolor: css("--line")},
+    legend: {orientation: "h", y: 1.14, x: 0, font: {size: 10}},
+    hovermode: "closest", showlegend: true
+  };
+  return Object.assign(base, extra || {});
+}
+const CFG = {displayModeBar: false, responsive: true};
+function draw(id, traces, extra){ Plotly.react(id, traces, layout(extra), CFG); }
+
+function fmt(x, nd){
+  if(x === null || x === undefined || !Number.isFinite(x)) return "&mdash;";
+  return x.toFixed(nd === undefined ? 2 : nd);
+}
+function pct(x, nd){ return Number.isFinite(x) ? (100 * x).toFixed(nd || 1) + "%" : "&mdash;"; }
+function commas(x){ return Math.round(x).toLocaleString("en-US"); }
+function kpi(k, v, sub){
+  return `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div>` +
+         (sub ? `<div class="k" style="text-transform:none">${sub}</div>` : "") + "</div>";
+}
+
+/* ---- current parameters from the calibration ------------------------- */
+function nameStats(t){ return D.names[t]; }
+function acParamsFor(ticker, X, T, N, volMult){
+  const s = nameStats(ticker), base = nameStats(D.meta.ticker);
+  // The impact parameters were measured on one name. Carrying them to another
+  // is done by the ratio of dollar volatility per unit of volume, P*sigma/ADV -
+  // the same dimensional argument Kyle's lambda rests on, and the same scaling
+  // scripts/make_results.py applies for the cross-sectional chart.
+  const unit = n => n.price * n.sigma_annual / n.adv_shares;
+  const scale = unit(s) / unit(base);
+  return {
+    X: X, T: T, N: N, S0: s.price,
+    sigma: s.price * s.sigma_annual / Math.sqrt(252 * C.seconds_per_day) * volMult,
+    eta: D.impact.eta * scale,
+    gamma: D.impact.gamma * scale,
+    epsilon: D.impact.epsilon
+  };
+}
+
+/* ---------------------------------------------------------------- tabs -- */
+document.querySelectorAll("nav button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    document.querySelectorAll(".tab").forEach(s => s.classList.remove("on"));
+    document.getElementById("tab-" + b.dataset.tab).classList.add("on");
+    redrawAll();
+  });
+});
+document.getElementById("bTheme").addEventListener("click", () => {
+  const el = document.documentElement;
+  el.dataset.theme = el.dataset.theme === "dark" ? "light" : "dark";
+  redrawAll();
+});
+
+/* =================================================== TAB 1: LIVE BOOK == */
+const TAPE = D.tape;
+let frame = 0, playing = false, timer = null;
+
+function bookInit(){
+  const sl = document.getElementById("cFrame");
+  sl.max = TAPE.frames.length - 1;
+  sl.addEventListener("input", () => { frame = +sl.value; bookDraw(); });
+  document.getElementById("bPlay").addEventListener("click", togglePlay);
+  document.getElementById("bStep").addEventListener("click", () => {
+    frame = Math.min(frame + 1, TAPE.frames.length - 1); bookDraw();
+  });
+  document.getElementById("bReset").addEventListener("click", () => {
+    frame = 0; bookDraw();
+  });
+  document.getElementById("bookKpis").innerHTML =
+    kpi("name", TAPE.ticker, "the recorded session") +
+    kpi("parent order", commas(TAPE.X) + " sh",
+        pct(TAPE.X / nameStats(TAPE.ticker).adv_shares, 2) + " of ADV, buy") +
+    kpi("arrival price", "$" + fmt(TAPE.arrival, 2), "the benchmark") +
+    kpi("shortfall on this path", fmt(TAPE.shortfall_bps, 2) + " bp",
+        "one path, not an average") +
+    kpi("schedule", "Almgren&ndash;Chriss", "&lambda; = " + C.lambdas[1].toExponential(0));
+  bookDraw();
+}
+
+function togglePlay(){
+  playing = !playing;
+  document.getElementById("bPlay").textContent = playing ? "pause" : "play";
+  document.getElementById("bPlay").classList.toggle("on", playing);
+  if(timer) clearInterval(timer);
+  if(playing){
+    timer = setInterval(() => {
+      frame++;
+      if(frame >= TAPE.frames.length){ frame = TAPE.frames.length - 1; togglePlay(); }
+      bookDraw();
+    }, 80);
+  }
+}
+
+function bookDraw(){
+  const f = TAPE.frames[frame];
+  document.getElementById("cFrame").value = frame;
+  document.getElementById("lFrame").textContent =
+    "t = " + Math.round(f.t) + "s   " + commas(f.done) + " / " + commas(TAPE.X) + " sh done";
+
+  // depth ladder
+  const maxq = Math.max(1, ...f.aq, ...f.bq);
+  let html = "";
+  for(let i = f.apx.length - 1; i >= 0; i--){
+    const w = 100 * f.aq[i] / maxq;
+    html += `<tr><td style="width:64px">${f.apx[i].toFixed(2)}</td>` +
+            `<td style="width:60px">${f.aq[i] * C.lot}</td>` +
+            `<td><span class="bar askbar" style="width:${w}%"></span></td></tr>`;
+  }
+  html += `<tr class="mid"><td>${((f.bid + f.ask) / 2).toFixed(3)}</td>` +
+          `<td colspan="2">mid &nbsp;&middot;&nbsp; spread ${
+            Math.round((f.ask - f.bid) * 100)} ticks &nbsp;&middot;&nbsp; ` +
+          `efficient ${f.latent.toFixed(2)}</td></tr>`;
+  for(let i = 0; i < f.bpx.length; i++){
+    const w = 100 * f.bq[i] / maxq;
+    html += `<tr><td>${f.bpx[i].toFixed(2)}</td><td>${f.bq[i] * C.lot}</td>` +
+            `<td><span class="bar bidbar" style="width:${w}%"></span></td></tr>`;
+  }
+  document.getElementById("ladder").innerHTML = html;
+
+  const ts = TAPE.frames.slice(0, frame + 1).map(x => x.t);
+  const mids = TAPE.frames.slice(0, frame + 1).map(x => (x.bid + x.ask) / 2);
+  const done = TAPE.frames.slice(0, frame + 1).map(x => x.done);
+  const sliceT = TAPE.slices.map(s => s.t);
+  const filled = [];
+  let acc = 0;
+  TAPE.slices.forEach(s => { acc += s.filled; filled.push(acc); });
+
+  draw("pBookPx", [
+    {x: ts, y: mids, type: "scatter", mode: "lines", name: "mid",
+     line: {color: HEX.TWAP, width: 1.6}},
+    {x: [0, TAPE.horizon], y: [TAPE.arrival, TAPE.arrival], type: "scatter",
+     mode: "lines", name: "arrival price",
+     line: {color: css("--dim"), width: 1, dash: "dot"}},
+    {x: TAPE.slices.filter(s => s.px).map(s => s.t),
+     y: TAPE.slices.filter(s => s.px).map(s => s.px), type: "scatter",
+     mode: "markers", name: "slice fill price",
+     marker: {color: HEX.AC, size: 5, opacity: .8}}
+  ], {yaxis: {title: "price ($)", gridcolor: css("--grid")},
+      xaxis: {title: "seconds", range: [0, TAPE.horizon], gridcolor: css("--grid")}});
+
+  draw("pBookFill", [
+    {x: ts, y: done, type: "scatter", mode: "lines", name: "shares done",
+     line: {color: HEX.AC, width: 2}},
+    {x: sliceT, y: filled, type: "scatter", mode: "none", name: "", showlegend: false},
+    {x: [0, TAPE.horizon], y: [0, TAPE.X], type: "scatter", mode: "lines",
+     name: "even pace", line: {color: css("--dim"), width: 1, dash: "dot"}}
+  ], {yaxis: {title: "shares", gridcolor: css("--grid")},
+      xaxis: {title: "seconds", range: [0, TAPE.horizon], gridcolor: css("--grid")},
+      margin: {l: 58, r: 16, t: 10, b: 40}});
+}
+
+/* =================================================== TAB 2: SCHEDULES == */
+function schedInputs(){
+  return {
+    ticker: document.getElementById("cName").value,
+    size: +document.getElementById("cSize").value,
+    T: +document.getElementById("cHor").value,
+    lam: Math.pow(10, +document.getElementById("cLam").value),
+    vol: +document.getElementById("cVol").value,
+    pov: +document.getElementById("cPov").value
+  };
+}
+
+function schedDraw(){
+  const q = schedInputs();
+  const s = nameStats(q.ticker);
+  const N = C.n_slices;
+  const X = Math.max(C.lot, Math.round(q.size * s.adv_shares / C.lot) * C.lot);
+  const p = acParamsFor(q.ticker, X, q.T, N, q.vol);
+
+  document.getElementById("lSize").textContent =
+    commas(X) + " sh (" + (100 * q.size).toFixed(2) + "% ADV)";
+  document.getElementById("lHor").textContent = (q.T / 60).toFixed(0) + " min";
+  document.getElementById("lLam").textContent = q.lam.toExponential(1);
+  document.getElementById("lVol").textContent = q.vol.toFixed(1) + "x";
+  document.getElementById("lPov").textContent = pct(q.pov, 0);
+
+  const note = document.getElementById("schedNote");
+  if(!(V.etaTilde(p) > 0)){
+    note.innerHTML = `<div class="note bad"><b>The model refuses this input.</b>
+      With ${N} slices over ${(q.T / 60).toFixed(0)} minutes, the interval is long enough that
+      eta&minus;gamma&middot;tau/2 turns negative, and the discrete Almgren&ndash;Chriss cost
+      function stops being convex &mdash; it would "prove" that infinitely fast trading is free.
+      Shorten the horizon or use more slices.</div>`;
+    ["pTraj", "pDecomp"].forEach(id => Plotly.purge(id));
+    document.getElementById("schedKpis").innerHTML = "";
+    return;
+  }
+  note.innerHTML = "";
+
+  const curve = [];
+  for(let k = 0; k < N; k++){
+    const u = 0.25 + (k + 0.5) * (q.T / N) / C.seconds_per_day;
+    curve.push(V.uShape(Math.min(Math.max(u, 0), 1), UCURVE));
+  }
+  const sol = V.solve(p, q.lam);
+  const twap = V.planTWAP(p), vwap = V.planVWAP(p, curve);
+  const cTwap = V.scheduleCost(p, twap), cVwap = V.scheduleCost(p, vwap);
+  const intervalVol = s.adv_shares * q.T / C.seconds_per_day;
+  const povN = [];
+  {
+    // POV against the *expected* volume curve: how the plan would look if the
+    // forecast were exactly right. Its realised version is in the Monte Carlo.
+    let rem = X;
+    for(let k = 0; k < N; k++){
+      const want = q.pov * intervalVol * curve[k] / N;
+      const nk = (k === N - 1) ? rem : Math.min(rem, want);
+      povN.push(nk); rem -= nk;
+    }
+    if(rem > 0) povN[N - 1] += rem;
+  }
+  const cPov = V.scheduleCost(p, povN);
+
+  const cum = arr => { const o = [X]; let a = X;
+    for(const v of arr){ a -= v; o.push(a); } return o; };
+  const ts = Array.from(sol.t);
+
+  draw("pTraj", [
+    {x: ts, y: Array.from(sol.x), name: "Almgren-Chriss", type: "scatter",
+     mode: "lines", line: {color: HEX.AC, width: 2.4}},
+    {x: ts, y: cum(twap), name: "TWAP", type: "scatter", mode: "lines",
+     line: {color: HEX.TWAP, width: 1.6, dash: "dash"}},
+    {x: ts, y: cum(vwap), name: "VWAP", type: "scatter", mode: "lines",
+     line: {color: HEX.VWAP, width: 1.6}},
+    {x: ts, y: cum(povN), name: "POV " + pct(q.pov, 0), type: "scatter",
+     mode: "lines", line: {color: HEX.POV, width: 1.6}}
+  ], {yaxis: {title: "shares remaining", gridcolor: css("--grid")},
+      xaxis: {title: "seconds into the order", gridcolor: css("--grid")}});
+
+  const parts = a => {
+    const pr = V.costParts(p, a);
+    return [V.bps(pr.perm, X, p.S0), V.bps(pr.spread, X, p.S0),
+            V.bps(pr.temp, X, p.S0)];
+  };
+  const names = ["TWAP", "VWAP", "POV", "AC"];
+  const sets = [twap, vwap, povN, sol.n].map(parts);
+  const sds = [cTwap, cVwap, cPov, sol].map(o =>
+    V.bps(o.stdev !== undefined ? o.stdev : Math.sqrt(o.variance), X, p.S0));
+  draw("pDecomp", [
+    {x: names, y: sets.map(v => v[0]), name: "permanent", type: "bar",
+     marker: {color: HEX.Adaptive}},
+    {x: names, y: sets.map(v => v[1]), name: "spread + fees", type: "bar",
+     marker: {color: HEX.POV}},
+    {x: names, y: sets.map(v => v[2]), name: "temporary (speed)", type: "bar",
+     marker: {color: HEX.TWAP}},
+    {x: names, y: sets.map(v => v[0] + v[1] + v[2]), name: "+/- 1 sd of total",
+     type: "scatter", mode: "markers",
+     error_y: {type: "data", array: sds, visible: true, color: css("--dim")},
+     marker: {color: css("--ink"), size: 5}}
+  ], {barmode: "stack", yaxis: {title: "expected cost (bp)", gridcolor: css("--grid")},
+      xaxis: {gridcolor: css("--grid")}});
+
+  const acBps = V.bps(sol.cost, X, p.S0), twBps = V.bps(cTwap.cost, X, p.S0);
+  document.getElementById("schedKpis").innerHTML =
+    kpi("expected cost, AC", fmt(acBps, 2) + " bp",
+        "TWAP would be " + fmt(twBps, 2) + " bp") +
+    kpi("cost dispersion, AC", fmt(V.bps(sol.stdev, X, p.S0), 2) + " bp",
+        "TWAP " + fmt(V.bps(cTwap.stdev, X, p.S0), 2) + " bp") +
+    kpi("half done by", sol.kappa > 0 ? fmt(sol.halfLife / 60, 1) + " min"
+                                      : (q.T / 120).toFixed(1) + " min",
+        "1/kappa = " + (sol.kappa > 0 ? fmt(1 / sol.kappa / 60, 1) + " min" : "infinite")) +
+    kpi("participation", pct(X / intervalVol, 1),
+        "of expected volume in the window") +
+    kpi("permanent share of cost",
+        pct(V.costParts(p, sol.n).perm / sol.cost, 0),
+        "unchangeable by any schedule");
+}
+
+/* ==================================================== TAB 3: FRONTIER == */
+function frontierDraw(){
+  const q = schedInputs();
+  const s = nameStats(q.ticker);
+  const N = C.n_slices;
+  const X = Math.max(C.lot, Math.round(q.size * s.adv_shares / C.lot) * C.lot);
+  const p = acParamsFor(q.ticker, X, q.T, N, q.vol);
+  if(!(V.etaTilde(p) > 0)){
+    ["pFrontier", "pKappa"].forEach(id => Plotly.purge(id));
+    document.getElementById("tFrontier").innerHTML =
+      "<tr><td>The parameters are outside the model's valid range &mdash; see the schedules tab.</td></tr>";
+    return;
+  }
+
+  const lams = [], cost = [], sd = [], kap = [];
+  for(let i = 0; i <= 60; i++){
+    const lam = Math.pow(10, -9 + i * (5.5 / 60));
+    const sol = V.solve(p, lam);
+    lams.push(lam);
+    cost.push(V.bps(sol.cost, X, p.S0));
+    sd.push(V.bps(sol.stdev, X, p.S0));
+    kap.push(sol.kappa);
+  }
+  const cur = V.solve(p, q.lam);
+
+  // Precomputed simulated points, only comparable at the grid's own settings.
+  const atGrid = Math.abs(q.size - C.sizes[Math.min(2, C.sizes.length - 1)]) < 1e-9
+              && Math.abs(q.T - C.horizon) < 1e-9 && Math.abs(q.vol - 1) < 1e-9
+              && q.ticker === D.meta.ticker;
+  const traces = [
+    {x: sd, y: cost, type: "scatter", mode: "lines", name: "model frontier",
+     line: {color: HEX.AC, width: 2.2}},
+    {x: [V.bps(cur.stdev, X, p.S0)], y: [V.bps(cur.cost, X, p.S0)],
+     type: "scatter", mode: "markers", name: "your λ",
+     marker: {color: css("--ink"), size: 11, symbol: "diamond"}}
+  ];
+  if(atGrid && D.frontier_sim.length){
+    traces.push({
+      x: D.frontier_sim.map(r => r.sim_stdev_bps),
+      y: D.frontier_sim.map(r => r.sim_cost_bps),
+      error_y: {type: "data", array: D.frontier_sim.map(r => r.sim_stderr_bps),
+                visible: true, color: css("--dim")},
+      text: D.frontier_sim.map(r => r.algo +
+        (Number.isFinite(r.lambda) ? " " + r.lambda.toExponential(0) : "")),
+      type: "scatter", mode: "markers+text", textposition: "top center",
+      textfont: {size: 9, color: css("--dim")},
+      name: "order book simulation",
+      marker: {color: HEX.Adaptive, size: 9, symbol: "circle-open", line: {width: 2}}
+    });
+  }
+  draw("pFrontier", traces, {
+    xaxis: {title: "cost standard deviation (bp)", gridcolor: css("--grid")},
+    yaxis: {title: "expected cost (bp)", gridcolor: css("--grid")}});
+  draw("pKappa", [
+    {x: lams, y: kap.map(k => k > 0 ? Math.LN2 / k / 60 : null), type: "scatter",
+     mode: "lines", name: "half-life (min)", line: {color: HEX.VWAP, width: 2}},
+    {x: [q.lam], y: [cur.kappa > 0 ? Math.LN2 / cur.kappa / 60 : null],
+     type: "scatter", mode: "markers", name: "your λ",
+     marker: {color: css("--ink"), size: 9}}
+  ], {xaxis: {title: "risk aversion λ", type: "log", gridcolor: css("--grid")},
+      yaxis: {title: "minutes to half done", type: "log", gridcolor: css("--grid")}});
+
+  let rows = "<tr><th>half done by</th><th>λ</th><th>expected cost</th>" +
+             "<th>cost sd</th><th>vs TWAP</th></tr>";
+  const twapCost = V.bps(V.scheduleCost(p, V.planTWAP(p)).cost, X, p.S0);
+  const marks = [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0];
+  marks.forEach(fr => {
+    const target = fr * q.T;
+    let best = null, bestErr = Infinity;
+    for(let i = 0; i < lams.length; i++){
+      const hl = kap[i] > 0 ? Math.LN2 / kap[i] : q.T / 2;
+      const err = Math.abs(hl - target);
+      if(err < bestErr){ bestErr = err; best = i; }
+    }
+    rows += `<tr><td>${(target / 60).toFixed(1)} min</td>` +
+            `<td>${lams[best].toExponential(1)}</td>` +
+            `<td>${fmt(cost[best], 2)} bp</td><td>${fmt(sd[best], 2)} bp</td>` +
+            `<td>${fmt(cost[best] - twapCost, 2)} bp</td></tr>`;
+  });
+  document.getElementById("tFrontier").innerHTML = rows;
+}
+
+/* ======================================================= TAB 4: COSTS == */
+function gridFilter(){
+  const size = +document.getElementById("cGridSize").value;
+  const vol = +document.getElementById("cGridVol").value;
+  return D.summary.filter(r => Math.abs(r.size_pct - size) < 1e-12
+                            && Math.abs(r.vol_mult - vol) < 1e-12);
+}
+function labelOf(r){
+  return r.algo + (r.lambda ? " " + Number(r.lambda).toExponential(0) : "");
+}
+
+function costsDraw(){
+  const rows = gridFilter();
+  const size = +document.getElementById("cGridSize").value;
+  const vol = +document.getElementById("cGridVol").value;
+  const stat = document.getElementById("cStat").value;
+
+  const hs = D.histograms.filter(h => Math.abs(h.size_pct - size) < 1e-12
+                                   && Math.abs(h.vol_mult - vol) < 1e-12
+                                   && (h.lambda === null
+                                       || Math.abs(h.lambda - C.lambdas[1]) < 1e-12));
+  draw("pHist", hs.map(h => {
+    const mids = [];
+    for(let i = 0; i + 1 < h.edges.length; i++)
+      mids.push(0.5 * (h.edges[i] + h.edges[i + 1]));
+    return {x: mids, y: h.counts, type: "scatter", mode: "lines",
+            name: h.algo, line: {color: HEX[h.algo], width: 1.8, shape: "spline"},
+            fill: "tozeroy", opacity: 0.25};
+  }), {xaxis: {title: "implementation shortfall (bp), positive = cost",
+               gridcolor: css("--grid")},
+       yaxis: {title: "paths", gridcolor: css("--grid")}});
+
+  const sorted = rows.slice().sort((a, b) => (a[stat] ?? 0) - (b[stat] ?? 0));
+  draw("pBars", [{
+    x: sorted.map(labelOf), y: sorted.map(r => r[stat]),
+    error_y: stat === "mean_bps"
+      ? {type: "data", array: sorted.map(r => r.stderr_bps), visible: true,
+         color: css("--dim")} : {visible: false},
+    type: "bar", name: stat,
+    marker: {color: sorted.map(r => HEX[r.algo])}
+  }], {showlegend: false, xaxis: {gridcolor: css("--grid"), tickangle: -35},
+       yaxis: {title: document.getElementById("cStat").selectedOptions[0].text,
+               gridcolor: css("--grid")}});
+
+  let html = "<tr><th>algorithm</th><th>λ</th><th>mean (bp)</th><th>se</th>" +
+             "<th>median</th><th>sd</th><th>p95</th><th>CVaR95</th><th>worst</th>" +
+             "<th>fill</th><th>vs VWAP</th><th>forced</th></tr>";
+  D.summary.forEach(r => {
+    const on = Math.abs(r.size_pct - size) < 1e-12 && Math.abs(r.vol_mult - vol) < 1e-12;
+    html += `<tr class="${on ? "hi" : ""}"><td>${r.algo} <span style="color:var(--dim)">` +
+      `${(100 * r.size_pct).toFixed(2)}% ADV, vol x${r.vol_mult}</span></td>` +
+      `<td>${r.lambda ? Number(r.lambda).toExponential(0) : "&mdash;"}</td>` +
+      `<td>${fmt(r.mean_bps)}</td><td>${fmt(r.stderr_bps)}</td>` +
+      `<td>${fmt(r.median_bps)}</td><td>${fmt(r.stdev_bps)}</td>` +
+      `<td>${fmt(r.p95_bps)}</td><td>${fmt(r.cvar95_bps)}</td>` +
+      `<td>${fmt(r.worst_bps)}</td><td>${pct(r.fill_rate, 1)}</td>` +
+      `<td>${fmt(r.vs_vwap_bps)}</td><td>${pct(r.forced_frac, 0)}</td></tr>`;
+  });
+  document.getElementById("tCosts").innerHTML = html;
+
+  const tickers = [...new Set(D.cross_section.map(r => r.ticker))];
+  draw("pCross", ALGOS.map(a => ({
+    x: tickers,
+    y: tickers.map(t => {
+      const r = D.cross_section.find(x => x.ticker === t && x.algo === a);
+      return r ? r.mean_bps : null;
+    }),
+    name: a, type: "bar", marker: {color: HEX[a]}
+  })), {barmode: "group", yaxis: {title: "mean shortfall (bp)", gridcolor: css("--grid")},
+        xaxis: {gridcolor: css("--grid")}});
+}
+
+/* ================================================= TAB 5: CALIBRATION == */
+function calibDraw(){
+  const I = D.impact, rows = I.rows;
+  const base = nameStats(D.meta.ticker);
+  document.getElementById("calibKpis").innerHTML =
+    kpi("permanent impact &gamma;", I.gamma.toExponential(2),
+        "$ per share, per share traded") +
+    kpi("temporary impact &eta;", I.eta.toExponential(2),
+        "$ per share, per share/second") +
+    kpi("fixed cost &epsilon;", "$" + fmt(I.epsilon, 4),
+        "half spread on " + D.meta.ticker) +
+    kpi("fitted impact exponent", fmt(I.exponent, 2),
+        "the model assumes 1; R&sup2; = " + fmt(I.exponent_r2, 2)) +
+    kpi("linear model fit", "R&sup2; = " + fmt(I.linear_r2, 3),
+        "across " + rows.length + " participation rates");
+
+  const xs = rows.map(r => r.X);
+  const fit = xs.map(x => I.gamma * x);
+  draw("pImpact", [
+    {x: xs, y: rows.map(r => r.perm_usd), type: "scatter", mode: "markers",
+     name: "measured permanent impact",
+     error_y: {type: "data", array: rows.map(r => r.perm_se), visible: true,
+               color: css("--dim")},
+     marker: {color: HEX.AC, size: 8}, xaxis: "x", yaxis: "y"},
+    {x: xs, y: fit, type: "scatter", mode: "lines", name: "gamma &middot; X",
+     line: {color: HEX.TWAP, width: 2}},
+    {x: rows.map(r => r.rate),
+     y: rows.map(r => Math.max(r.cost_per_share - I.epsilon - 0.5 * I.gamma * r.X, 1e-6)),
+     type: "scatter", mode: "markers", name: "cost of speed ($/share)",
+     marker: {color: HEX.Adaptive, size: 8}, xaxis: "x2", yaxis: "y2"},
+    {x: rows.map(r => r.rate), y: rows.map(r => I.eta * r.rate), type: "scatter",
+     mode: "lines", name: "eta &middot; rate (linear model)",
+     line: {color: HEX.VWAP, width: 2}, xaxis: "x2", yaxis: "y2"}
+  ], {grid: {rows: 1, columns: 2, pattern: "independent"},
+      xaxis: {title: "parent size (shares)", domain: [0, 0.45], gridcolor: css("--grid")},
+      yaxis: {title: "permanent move ($)", gridcolor: css("--grid")},
+      xaxis2: {title: "trading rate (sh/s)", type: "log", domain: [0.57, 1],
+               gridcolor: css("--grid")},
+      yaxis2: {title: "$ / share", type: "log", anchor: "x2", gridcolor: css("--grid")}});
+
+  let html = "<tr><th>name</th><th>price</th><th>vol (ann)</th><th>ADV real</th>" +
+             "<th>ADV sim</th><th>&sigma;/s target</th><th>&sigma;/s sim</th>" +
+             "<th>rate scale</th><th>spread (ticks)</th><th>touch (lots)</th></tr>";
+  Object.keys(D.names).forEach(t => {
+    const s = D.names[t];
+    html += `<tr class="${t === D.meta.ticker ? "hi" : ""}"><td>${t}</td>` +
+      `<td>$${fmt(s.price, 2)}</td><td>${pct(s.sigma_annual, 1)}</td>` +
+      `<td>${(s.adv_shares / 1e6).toFixed(1)}M</td>` +
+      `<td>${(s.sim_adv_shares / 1e6).toFixed(1)}M</td>` +
+      `<td>${s.target_sigma_per_sec.toFixed(5)}</td>` +
+      `<td>${s.sim_sigma_per_sec.toFixed(5)}</td>` +
+      `<td>${fmt(s.rate_scale, 2)}</td>` +
+      `<td>${fmt(s.median_spread_ticks, 1)}</td>` +
+      `<td>${fmt(s.mean_touch_lots, 1)}</td></tr>`;
+  });
+  document.getElementById("tVenue").innerHTML = html;
+
+  const tk = Object.keys(D.names);
+  draw("pSpread", [
+    {x: tk, y: tk.map(t => D.names[t].spread_bps_cs), name: "Corwin-Schultz",
+     type: "bar", marker: {color: HEX.VWAP}},
+    {x: tk, y: tk.map(t => D.names[t].spread_bps_ar), name: "Abdi-Ranaldo",
+     type: "bar", marker: {color: HEX.POV}},
+    {x: tk, y: tk.map(t => 1e4 * D.names[t].tick_size / D.names[t].price),
+     name: "one tick (the truth, near enough)", type: "bar",
+     marker: {color: HEX.AC}}
+  ], {barmode: "group", yaxis: {title: "spread estimate (bp), log scale",
+                               type: "log", gridcolor: css("--grid")},
+      xaxis: {gridcolor: css("--grid")}});
+}
+
+/* ====================================================== TAB 6: STRESS == */
+function stressDraw(runMC){
+  const size = +document.getElementById("cSSize").value;
+  const T = +document.getElementById("cSHor").value;
+  const N = +document.getElementById("cSN").value;
+  const vol = +document.getElementById("cSVol").value;
+  const lam = Math.pow(10, +document.getElementById("cSLam").value);
+  const etaMult = +document.getElementById("cSEta").value;
+  const ticker = D.meta.ticker, s = nameStats(ticker);
+  const X = Math.max(C.lot, Math.round(size * s.adv_shares / C.lot) * C.lot);
+
+  document.getElementById("lSSize").textContent =
+    commas(X) + " sh (" + (100 * size).toFixed(2) + "% ADV)";
+  document.getElementById("lSHor").textContent = (T / 60).toFixed(0) + " min";
+  document.getElementById("lSN").textContent = N;
+  document.getElementById("lSVol").textContent = vol.toFixed(1) + "x";
+  document.getElementById("lSLam").textContent = lam.toExponential(1);
+  document.getElementById("lSEta").textContent = etaMult.toFixed(2) + "x";
+
+  const p = acParamsFor(ticker, X, T, N, vol);
+  p.eta *= etaMult;
+
+  const intervalVol = s.adv_shares * T / C.seconds_per_day;
+  const participation = X / intervalVol;
+  const notes = [];
+  if(!(V.etaTilde(p) > 0)){
+    notes.push(`<div class="note bad"><b>eta&minus;gamma&middot;tau/2 &le; 0.</b>
+      The interval (${(T / N).toFixed(0)}s) is too long for these impact parameters, so the
+      discrete model's cost function is no longer convex and its "optimum" is to trade
+      everything instantly. The code raises rather than returning that number.</div>`);
+  }
+  if(vol === 0){
+    notes.push(`<div class="note"><b>Zero volatility.</b> There is no risk to trade off
+      against cost, so every risk aversion gives the same answer: trade uniformly. The urgency
+      slider does nothing, which is the correct behaviour and a useful check that the solver is
+      not inventing structure.</div>`);
+  }
+  if(participation > 0.25){
+    notes.push(`<div class="note bad"><b>${pct(participation, 0)} of the volume expected in this
+      window.</b> The closed form will happily price this, because it assumes an infinitely
+      elastic market. The order book simulation says otherwise &mdash; see the fill rate chart:
+      past roughly a quarter of interval volume the venue simply does not have the shares, and
+      the model's cost estimate becomes fiction.</div>`);
+  } else if(participation > 0.1){
+    notes.push(`<div class="note"><b>${pct(participation, 0)} of the window's expected volume.</b>
+      Aggressive but survivable. This is where the linear impact assumption starts to
+      understate cost: the fitted exponent from the simulator is
+      ${fmt(D.impact.exponent, 2)}, not 1.</div>`);
+  }
+  if(N === 1){
+    notes.push(`<div class="note"><b>One slice.</b> The entire order in a single child order.
+      Every schedule collapses to the same thing and the concept of a trajectory disappears.</div>`);
+  }
+  if(T / N < 5){
+    notes.push(`<div class="note"><b>${(T / N).toFixed(1)}s slices.</b> Below a few seconds the
+      model's assumption that impact decays fully between slices is not credible: real temporary
+      impact takes tens of seconds to relax, so slices this short overlap and the true cost is
+      higher than anything shown here.</div>`);
+  }
+  if(!notes.length){
+    notes.push(`<div class="note ok">Parameters are inside the range where the model and the
+      simulator agree to within a basis point or two. Push the size or shorten the horizon to
+      find the edge.</div>`);
+  }
+  document.getElementById("stressNotes").innerHTML = notes.join("");
+
+  if(V.etaTilde(p) > 0 && runMC !== false){
+    const paths = +document.getElementById("cPaths").value;
+    document.getElementById("lPaths").textContent = paths;
+    const curve = [];
+    for(let k = 0; k < N; k++){
+      const u = 0.25 + (k + 0.5) * (T / N) / C.seconds_per_day;
+      curve.push(V.uShape(Math.min(Math.max(u, 0), 1), UCURVE));
+    }
+    const t0 = performance.now();
+    const res = V.mc(p, {paths, lam, curve, pov: C.pov_rate, tilt: 1.0,
+                         intervalVolume: intervalVol, seed: 987654321});
+    const ms = performance.now() - t0;
+    const traces = ALGOS.map(a => {
+      const st = V.stats(res[a]);
+      return {y: Array.from(res[a]), type: "box", name: a,
+              marker: {color: HEX[a]}, boxpoints: false,
+              hovertext: `mean ${st.mean.toFixed(2)} bp, sd ${st.sd.toFixed(2)}`};
+    });
+    draw("pMC", traces, {
+      yaxis: {title: "shortfall (bp), reduced-form model", gridcolor: css("--grid")},
+      xaxis: {gridcolor: css("--grid")},
+      margin: {l: 58, r: 16, t: 48, b: 44},
+      title: {text: `${paths} paths in ${ms.toFixed(0)} ms`,
+              font: {size: 10, color: css("--dim")}, x: 0, y: 0.99}});
+  }
+
+  // Capacity: precomputed, from the order book simulation.
+  const byS = {};
+  D.summary.filter(r => r.vol_mult === 1 && r.algo === "TWAP").forEach(r => {
+    byS[r.size_pct] = r;
+  });
+  const sizes = Object.keys(byS).map(Number).sort((a, b) => a - b);
+  draw("pCapacity", [
+    {x: sizes.map(x => 100 * x), y: sizes.map(x => byS[x].mean_bps),
+     name: "mean cost (bp)", type: "scatter", mode: "lines+markers",
+     line: {color: HEX.TWAP, width: 2}},
+    {x: sizes.map(x => 100 * x), y: sizes.map(x => byS[x].cvar95_bps),
+     name: "CVaR 95% (bp)", type: "scatter", mode: "lines+markers",
+     line: {color: HEX.Adaptive, width: 1.6, dash: "dot"}},
+    {x: sizes.map(x => 100 * x), y: sizes.map(x => 100 * byS[x].fill_rate),
+     name: "fill rate (%)", type: "scatter", mode: "lines+markers",
+     yaxis: "y2", line: {color: HEX.AC, width: 2}}
+  ], {xaxis: {title: "parent size (% of ADV, over " + (C.horizon / 60).toFixed(0) + " min)",
+              gridcolor: css("--grid")},
+      yaxis: {title: "bp", gridcolor: css("--grid")},
+      margin: {l: 58, r: 58, t: 26, b: 44},
+      yaxis2: {title: {text: "fill rate (%)", standoff: 2}, overlaying: "y",
+               side: "right", range: [0, 105], gridcolor: "rgba(0,0,0,0)"}});
+}
+
+/* ============================================================== wiring == */
+function populate(){
+  const sel = document.getElementById("cName");
+  Object.keys(D.names).forEach(t => {
+    const o = document.createElement("option");
+    o.value = t; o.textContent = t + "  ($" + D.names[t].price.toFixed(2) + ", " +
+      (100 * D.names[t].sigma_annual).toFixed(0) + "% vol, " +
+      (D.names[t].adv_shares / 1e6).toFixed(0) + "M sh/day)";
+    if(t === D.meta.ticker) o.selected = true;
+    sel.appendChild(o);
+  });
+  const gs = document.getElementById("cGridSize");
+  C.sizes.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = (100 * v).toFixed(2) + "% of ADV";
+    if(Math.abs(v - 0.005) < 1e-12) o.selected = true;
+    gs.appendChild(o);
+  });
+  const gv = document.getElementById("cGridVol");
+  C.vols.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v + "x normal volatility";
+    if(v === 1) o.selected = true;
+    gv.appendChild(o);
+  });
+  document.getElementById("cHor").value = C.horizon;
+
+  document.getElementById("footNote").innerHTML =
+    `<b>How this page computes.</b> The Almgren&ndash;Chriss schedule maths, the cost
+     decomposition, the frontier and the browser Monte Carlo are <span class="pill live">live</span>
+     &mdash; ported to JavaScript and recomputed on every control change; they are pinned to the
+     Python library by <code>scripts/check_page.py</code>.
+     The order book results, the impact calibration, the animation and the cost distributions are
+     <span class="pill pre">precomputed</span> by <code>scripts/make_results.py</code>
+     (${C.paths} paths per cell, ${C.n_slices} slices, ${(C.horizon / 60).toFixed(0)}-minute
+     horizon) and shipped in <code>data.js</code>.
+     &nbsp;&middot;&nbsp; Market data (price, volatility, ADV) from daily bars as of
+     <b>${D.meta.as_of}</b>, source <b>${D.meta.source}</b>; results generated
+     ${D.meta.generated}. Order flow, the book, and every execution are simulated &mdash; no
+     intraday or tick data is used anywhere.
+     &nbsp;&middot;&nbsp; <a href="${D.meta.repo}">source and write-up on GitHub</a>.`;
+}
+
+function redrawAll(){
+  const on = document.querySelector(".tab.on").id;
+  if(on === "tab-book") bookDraw();
+  if(on === "tab-sched") schedDraw();
+  if(on === "tab-frontier") frontierDraw();
+  if(on === "tab-costs") costsDraw();
+  if(on === "tab-calib") calibDraw();
+  if(on === "tab-stress") stressDraw(false);
+}
+
+function boot(){
+  if(!window.DATA){
+    document.querySelector("main").innerHTML =
+      '<div class="card"><h3>data.js did not load</h3><p class="sub">This page needs ' +
+      '<code>docs/data.js</code> next to it. Regenerate it with ' +
+      '<code>python scripts/make_results.py &amp;&amp; python scripts/build_frontend.py</code>.' +
+      '</p></div>';
+    return;
+  }
+  populate();
+  bookInit();
+  ["cName", "cSize", "cHor", "cLam", "cVol", "cPov"].forEach(id =>
+    document.getElementById(id).addEventListener("input", () => {
+      schedDraw();
+      if(document.querySelector(".tab.on").id === "tab-frontier") frontierDraw();
+    }));
+  ["cGridSize", "cGridVol", "cStat"].forEach(id =>
+    document.getElementById(id).addEventListener("change", costsDraw));
+  ["cSSize", "cSHor", "cSN", "cSVol", "cSLam", "cSEta"].forEach(id =>
+    document.getElementById(id).addEventListener("input", () => stressDraw(true)));
+  document.getElementById("cPaths").addEventListener("input", () => {
+    document.getElementById("lPaths").textContent =
+      document.getElementById("cPaths").value;
+  });
+  document.getElementById("bRunMC").addEventListener("click", () => stressDraw(true));
+  schedDraw();
+}
+boot();
+</script>
+</body>
+</html>

@@ -37,3 +37,6 @@ data/raw/
 Thumbs.db
 .idea/
 .vscode/
+
+# --- scratch figures from ad-hoc runs ---
+_*.png
