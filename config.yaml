@@ -80,6 +80,9 @@ impact:
   gamma: 0.0                      # 0 = measure from the simulator
   eta: 0.0                        # 0 = measure from the simulator
   epsilon_from_spread: true
+  # Recorded, not charged: every shortfall in results/ is gross of fees. A
+  # per-share fee is constant across algorithms on a parent that completes, so
+  # it moves the level and not a single comparison. See DEEP_DIVE.md §3.5.
   fee_bps: 0.15
   fit_impact_exponent: true
   # Participation rates at which parent orders are run to trace the impact

@@ -79,6 +79,14 @@ Past that the venue cannot supply the shares inside the horizon, and the closed
 form — which has no term for an unfillable order — gives an answer that is not
 merely inaccurate but meaningless.
 
+**What the cost number includes.** Arrival-price implementation shortfall on
+fills that actually happened in the book: the spread the agent's child orders
+crossed, the impact the book showed, and the unfilled remainder marked at the
+terminal mid with the fill rate reported next to it. Gross of exchange fees —
+constant per share, so it moves the level and no comparison. Algorithms see
+lagged information only; POV sizes off the previous slice's volume and VWAP
+follows the forecast curve, not the realised one. Details in `DEEP_DIVE.md` §3.5.
+
 **Across names, cost is volatility over liquidity.** What separates expensive
 names from cheap ones is not price or sector but the ratio of dollar volatility
 to volume — the same quantity Kyle's λ is built from.
@@ -107,9 +115,15 @@ pip install -r requirements.txt
 
 pytest                                  # 148 tests
 python scripts/make_results.py --quick  # ~2 min smoke test
-python scripts/make_results.py          # full run, ~3.5 min on 8 cores
+python scripts/make_results.py          # full run, ~2 hours on 8 cores
+python scripts/build_frontend.py        # regenerate docs/data.js from results/
 python scripts/check_page.py            # verify docs/ ships and the JS matches src/
 ```
+
+The full run is 2,250 tournament cells × 9 algorithm variants plus the impact
+sweep and the cross-section; budget a couple of hours. (`results/make_results.log`
+reports 57,460s of wall clock for the shipped run because the machine suspended
+overnight partway through — the CPU time is about 7,800s.)
 
 Everything is seeded — two runs produce identical numbers.
 `scripts/refresh_data.py` is the only script that touches the network; without

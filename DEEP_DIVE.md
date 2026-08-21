@@ -197,6 +197,48 @@ histograms report — an execution desk's cost variance genuinely does include t
 market's move, and removing it would understate the tail that `λ` exists to
 price.
 
+### 3.5 What the cost number includes, and what an algorithm is allowed to know
+
+Every shortfall reported here is arrival-price implementation shortfall: the
+average fill price against the mid at the moment the parent order was released,
+signed so that positive is expensive. It is charged against fills that actually
+happened in the book, so the spread paid is whatever the agent's marketable
+child orders crossed — including the part of it that the agent's own trading
+widened — and the impact paid is whatever the book did in response. Nothing is
+netted out and no fill is assumed. Where the venue could not supply the shares
+inside the horizon, the unexecuted remainder is marked at the terminal mid and
+the fill rate is reported alongside the cost, because a cheap average price on
+60% of the order is not an execution.
+
+What is *not* charged is the exchange take fee. `impact.fee_bps` in
+`config.yaml` is declarative — the value is carried through the config object
+but no code applies it — so the numbers are gross of fees and commissions. That
+is deliberate and it is also harmless for the comparison this project makes: on
+a parent order that completes, a per-share fee is a constant, so it shifts every
+algorithm's shortfall by the same 0.15 bp and moves no difference, no paired
+t-statistic and no frontier ordering. It matters for the level, not the ranking,
+and the level is not what is being claimed. A desk pricing an actual programme
+would add it back, along with borrow and any commission schedule.
+
+Look-ahead is the other way a number like this goes quietly wrong, and the rule
+in `src/execution/schedules.py` is that an algorithm may condition only on
+information dated strictly before the slice it is sizing. The one place this
+binds hard is POV, which must size off the volume printed in the *previous*
+slice rather than the slice it is about to trade into: participating in volume
+that its own trading helps create is worth roughly a basis point of free money
+and would make POV look like the best algorithm in the tournament. `ExecState`
+carries lagged fields only, so the constraint is enforced by what the algorithms
+can see rather than by discipline.
+
+Two related cases are worth being explicit about. VWAP follows the *modelled*
+U-shaped intraday curve from `config.yaml`, not the volume the session actually
+printed — a realised-volume VWAP would be clairvoyant, and it is exactly the
+version that flatters itself in a backtest. The Adaptive schedule re-solves on
+the remaining shares and the remaining time, which is information it genuinely
+has. The calibration in §5 is the one place the same paths inform both the
+parameters and the evaluation; the impact coefficients are fitted on a separate
+participation sweep with its own seeds, not on the tournament paths.
+
 ## 4. Implementation walkthrough
 
 ### 4.1 The matching engine (`src/lob/book.py`)

@@ -132,7 +132,11 @@ class ImpactConfig:
 
     gamma: float = 0.0                    # 0 => calibrate
     eta: float = 0.0                      # 0 => calibrate
-    epsilon_from_spread: bool = True      # fixed cost = half spread + fees
+    epsilon_from_spread: bool = True      # fixed cost = the venue's half spread
+    # Declarative only: nothing charges this. Shortfall here is gross of fees
+    # and commissions. On a parent that completes, a per-share fee is a
+    # constant - it shifts every algorithm identically and changes no paired
+    # difference - so it is recorded as an assumption rather than applied.
     fee_bps: float = 0.15                 # exchange take fee, per side
     # Almgren-Chriss assumes linear temporary impact. The simulator does not:
     # walking a book with finite depth is convex. This exponent is *estimated*
