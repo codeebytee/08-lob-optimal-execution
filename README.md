@@ -73,11 +73,13 @@ judged over hundreds of orders and never over one. The paired tests in
 share — linear — while walking a finite book is convex. Agreement is good for
 patient schedules and deteriorates as `λ` rises.
 
-**Past a certain size, the model stops describing anything.** Below roughly 0.5%
-of a day's volume in half an hour, everything fills and costs grow smoothly.
-Past that the venue cannot supply the shares inside the horizon, and the closed
-form — which has no term for an unfillable order — gives an answer that is not
-merely inaccurate but meaningless.
+**Past a certain size, the model stops describing anything.** Up to 1% of a
+day's volume worked in half an hour, the venue fills 98.7% of the parent and
+costs grow smoothly. At 2% the fill rate collapses to 64%: the book cannot
+supply the shares inside the horizon, and the closed form — which has no term
+for an unfillable order — gives an answer that is not merely inaccurate but
+meaningless. The cliff is somewhere between those two sizes; the grid does not
+resolve it more finely than that.
 
 **What the cost number includes.** Arrival-price implementation shortfall on
 fills that actually happened in the book: the spread the agent's child orders

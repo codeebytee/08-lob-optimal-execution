@@ -411,10 +411,11 @@ finite book is convex. An aggressive schedule is therefore cheaper on paper than
 in the book, and the gap grows with urgency.
 
 **Past a certain size, the model stops describing anything.** The capacity
-panel shows fill rate against parent size. Below roughly half a percent of a
-day's volume in half an hour everything completes and costs grow smoothly. Past
-that, the venue cannot supply the shares inside the horizon: the fill rate
-falls, the unfilled remainder is charged at whatever the price did, and the
+panel shows fill rate against parent size. Averaged over algorithms at base
+volatility, the venue fills 99.6% of a parent worth 0.5% of a day's volume and
+98.7% of one worth 1%, with cost growing smoothly. At 2% the fill rate falls to
+64%: the venue cannot supply the shares inside the horizon, the unfilled
+remainder is charged at whatever the price did, and the
 closed form — which has no term for an unfillable order — gives an answer that
 is not merely inaccurate but meaningless.
 
