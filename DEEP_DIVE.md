@@ -327,8 +327,8 @@ names actually quote.
 
 **The impact measurement.** The recovered `γ` is compared against the Kyle
 coefficient the venue was built with; the ratio is reported in the run log and
-is around 85–90%, with the shortfall attributable to measuring the mid rather
-than the latent price. `tests/test_calibrate.py` asserts this recovery
+is 76% on the shipped run, with the shortfall attributable to measuring the mid
+rather than the latent price. `tests/test_calibrate.py` asserts this recovery
 end-to-end as a test. The linear cost model fits the participation sweep with
 R² ≈ 0.9, and the fitted temporary-impact exponent is reported alongside — the
 model assumes 1.

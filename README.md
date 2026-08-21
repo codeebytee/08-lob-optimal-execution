@@ -4,8 +4,19 @@ A limit order book simulator with Hawkes-driven order flow, the Almgren–Chriss
 closed form solved on top of it, and an honest measurement of where the closed
 form stops describing the market it is supposed to describe.
 
+![python](https://img.shields.io/badge/python-3.11%2B-blue)
+![numpy](https://img.shields.io/badge/numpy-scipy-013243)
+![plotly](https://img.shields.io/badge/plotly-vendored%20offline-3f4f75)
+![tests](https://img.shields.io/badge/pytest-148%20tests-green)
+![license](https://img.shields.io/badge/license-MIT-lightgrey)
+
+**Live demo:** https://codeebytee.github.io/08-lob-optimal-execution/ *(enable Pages: Settings → Pages → main /docs)*
+
 **[→ Open the interactive interface](https://codeebytee.github.io/08-lob-optimal-execution/)**
 (runs offline; no server, no install — or double-click `docs/index.html`)
+
+**Run the interface locally:** clone the repo and double-click `docs/index.html`.
+Nothing to install — `requirements.txt` is only needed to re-run the research.
 
 ![the interface](results/interface.gif)
 
@@ -79,8 +90,9 @@ against its invariants. Hawkes MLE recovers the branching ratio to ±0.12 and
 time-rescaling residuals are unit-exponential under the true model. The closed
 form reproduces TWAP exactly as `λ→0`, satisfies its defining `cosh` equation to
 1e-12, and matches a 40,000-path Monte Carlo to 2–3%. The measured impact
-coefficient recovers the Kyle λ the venue was built with to ~85–90%. The
-JavaScript port matches `src/` to 6e-15.
+coefficient recovers the Kyle λ the venue was built with to 76% — the gap is
+the part of the latent price move that the mid does not show. The JavaScript
+port matches `src/` to 6e-15.
 
 Two spread estimators (Corwin–Schultz, Abdi–Ranaldo) are validated against a
 synthetic Roll model where the true spread is known, then both fail on real
@@ -102,6 +114,32 @@ python scripts/check_page.py            # verify docs/ ships and the JS matches 
 Everything is seeded — two runs produce identical numbers.
 `scripts/refresh_data.py` is the only script that touches the network; without
 it the committed snapshot in `data/` is used.
+
+## Design decisions
+
+**A latent efficient price, not pure order flow.** A book driven only by
+self-exciting arrivals produces a price that random-walks with the wrong
+variance and no anchor. Quotes here are posted around a latent price that
+diffuses at the name's measured volatility and absorbs a Kyle-λ impact term
+from signed volume. The cost is one extra unobservable; the gain is a venue
+whose ADV and volatility match the real name, which is the only reason
+calibrated numbers mean anything.
+
+**Impact is measured, not assumed.** Almgren–Chriss needs η and γ. Reading them
+off the config the venue was built with would make the validation circular, so
+the coefficients are estimated by executing orders against the simulator at a
+range of participation rates and regressing shortfall on rate — the same
+procedure a broker runs on its own fills. Recovering the Kyle λ the venue was
+constructed with to 76% is then a real test rather than an identity.
+
+**Live JS for the closed form, precomputed grids for the simulator.** The
+schedule maths, cost decomposition and frontier are cheap, so they are ported to
+JavaScript and recomputed on every slider move, with a parity test pinning the
+port to `src/` at 6e-15. The book, the impact calibration and the shortfall
+distributions cost minutes of CPU each, so Python sweeps the grid and the page
+interpolates and says so. The alternative — precomputing everything — makes the
+page a slideshow, and the honest version of "this is a lookup" is a label, not a
+hidden one.
 
 ## Where to start
 
