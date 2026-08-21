@@ -64,9 +64,68 @@ _CTX: Dict[str, object] = {}
 # the tournament worker
 # --------------------------------------------------------------------------
 
+_POOL_PROBE_SECONDS = 90.0
+
+
+def _probe() -> bool:
+    """A task that does nothing, used to prove a worker process is alive."""
+    return True
+
+
 def _init(payload: Dict[str, object]) -> None:
     """Runs once per worker process. Everything here is read-only afterwards."""
     _CTX.update(payload)
+
+
+def _parallel_map(fn, tasks, ctx: Dict[str, object], workers: int,
+                  chunksize: int = 1, log=None):
+    """Map ``fn`` over ``tasks``, yielding results as they complete.
+
+    Process pools are a convenience here, not a requirement: every task is
+    independent and the serial path produces identical numbers, only slower.
+    Windows occasionally refuses to start a pool at all - the child fails in
+    ``spawn_main`` with ``PermissionError: [WinError 5]`` while duplicating the
+    parent's pipe handle, which is an environment condition (handle pressure,
+    an interfering security product) rather than anything wrong with the work.
+    Losing an hour of completed stages to that is not acceptable, so pool
+    creation is retried with fewer workers and then abandoned for the serial
+    path, with a line in the log saying which one ran.
+    """
+    if workers > 1:
+        attempts = [w for w in (workers, max(2, workers // 2), 2) if w > 1]
+        seen = []
+        for w in attempts:
+            if w in seen:
+                continue
+            seen.append(w)
+            pool = None
+            try:
+                pool = mp.Pool(w, initializer=_init, initargs=(ctx,))
+                # The constructor returns before the children have finished
+                # starting, and a child that dies during spawn shows up only
+                # as work that never comes back. Round-trip one trivial task
+                # so a broken pool fails here, in a few seconds, rather than
+                # hanging the stage.
+                pool.apply_async(_probe).get(timeout=_POOL_PROBE_SECONDS)
+            except Exception as exc:                # noqa: BLE001 - see above
+                if log is not None:
+                    log(f"  process pool with {w} workers failed to start "
+                        f"({type(exc).__name__}: {exc}); retrying smaller")
+                if pool is not None:
+                    pool.terminate()
+                continue
+            # Past this point results have been handed to the caller, so a
+            # failure is a real one and must not be retried behind its back.
+            with pool:
+                yield from pool.imap_unordered(fn, tasks, chunksize=chunksize)
+            return
+
+        if log is not None:
+            log("  no process pool available; running this stage serially")
+
+    _init(ctx)
+    for task in tasks:
+        yield fn(task)
 
 
 def _make_algo(name: str, lam: float, params: ACParams, cfg: AppConfig, flow):
@@ -254,18 +313,10 @@ def stage_impact(cfg: AppConfig, snap, cals, ticker: str, quick: bool,
            "n_slices": n_slices}
     bucket: Dict[float, List[Dict[str, float]]] = {rho: [] for rho in parts}
     sizes: Dict[float, int] = {}
-    if workers > 1:
-        with mp.Pool(workers, initializer=_init, initargs=(ctx,)) as pool:
-            for rho, X, sample in pool.imap_unordered(_impact_task, tasks,
-                                                      chunksize=2):
-                bucket[rho].append(sample)
-                sizes[rho] = X
-    else:
-        _init(ctx)
-        for task in tasks:
-            rho, X, sample = _impact_task(task)
-            bucket[rho].append(sample)
-            sizes[rho] = X
+    for rho, X, sample in _parallel_map(_impact_task, tasks, ctx, workers,
+                                       chunksize=2, log=log):
+        bucket[rho].append(sample)
+        sizes[rho] = X
 
     rows = [summarise_impact_samples(rho, sizes[rho], horizon, bucket[rho])
             for rho in parts]
@@ -293,20 +344,14 @@ def stage_tournament(cfg: AppConfig, ctx: Dict[str, object], sizes, vols,
         f"{3 + 2 * len(ctx['lambdas'])} runs")
     t0 = time.time()
     rows: List[Dict[str, float]] = []
-    if workers > 1:
-        with mp.Pool(workers, initializer=_init, initargs=(ctx,)) as pool:
-            for i, part in enumerate(pool.imap_unordered(_run_cell, tasks,
-                                                         chunksize=1)):
-                rows.extend(part)
-                if (i + 1) % max(1, len(tasks) // 20) == 0:
-                    done = (i + 1) / len(tasks)
-                    el = time.time() - t0
-                    log(f"  {done:5.0%}  [{el:5.0f}s elapsed, "
-                        f"{el / done - el:5.0f}s left]")
-    else:
-        _init(ctx)
-        for task in tasks:
-            rows.extend(_run_cell(task))
+    for i, part in enumerate(_parallel_map(_run_cell, tasks, ctx, workers,
+                                          chunksize=1, log=log)):
+        rows.extend(part)
+        if (i + 1) % max(1, len(tasks) // 20) == 0:
+            done = (i + 1) / len(tasks)
+            el = time.time() - t0
+            log(f"  {done:5.0%}  [{el:5.0f}s elapsed, "
+                f"{el / done - el:5.0f}s left]")
     log(f"  done in {time.time() - t0:.0f}s")
     return pd.DataFrame(rows)
 
@@ -404,14 +449,9 @@ def stage_cross_section(cfg, snap, cals, cal, ic, stats, workers: int,
     log(f"cross-section: {len(tasks)} runs across {len(snap.tickers)} names")
     rows: List[Dict[str, float]] = []
     t0 = time.time()
-    if workers > 1:
-        with mp.Pool(workers, initializer=_init, initargs=(cross_ctx,)) as pool:
-            for part in pool.imap_unordered(_run_cross_section, tasks, chunksize=2):
-                rows.extend(part)
-    else:
-        _init(cross_ctx)
-        for task in tasks:
-            rows.extend(_run_cross_section(task))
+    for part in _parallel_map(_run_cross_section, tasks, cross_ctx, workers,
+                             chunksize=2, log=log):
+        rows.extend(part)
     cross = pd.DataFrame(rows)
     cross.to_csv(RESULTS / "cross_section.csv", index=False, float_format="%.6g")
     for t in snap.tickers:
